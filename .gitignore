@@ -1,0 +1,12 @@
+**/node_modules
+**/.env
+**/.env.*
+**/dist
+**/.expo
+**/.expo-shared
+**/*.log
+.DS_Store
+
+# sqlite artifacts (do not commit)
+backend/data/*.sqlite-wal
+backend/data/*.sqlite-shm

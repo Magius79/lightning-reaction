@@ -1,0 +1,127 @@
+import { Server } from 'socket.io';
+import { Room } from '../rooms/Room';
+import { AntiCheat } from './AntiCheat';
+
+export class GameEngine {
+  private io: Server;
+  private rooms: Map<string, Room>;
+  private antiCheat: AntiCheat;
+  // Note: backend API calls (verify-payment, payout, refund) are handled by RoomManager.
+
+  constructor(io: Server, rooms: Map<string, Room>) {
+    this.io = io;
+    this.rooms = rooms;
+    this.antiCheat = new AntiCheat();
+  }
+
+  startGame(roomId: string) {
+    const room = this.rooms.get(roomId);
+    if (!room || room.getPlayerCount() < 2) return;
+
+    room.status = 'starting';
+    room.startTime = Date.now();
+
+    this.io.to(roomId).emit('gameStart', { countdown: 3 });
+
+    let countdown = 3;
+    const countdownInterval = setInterval(() => {
+      countdown--;
+      if (countdown > 0) {
+        this.io.to(roomId).emit('roomUpdated', {
+          roomId,
+          players: Array.from(room.players.values()),
+          status: 'countdown',
+          countdown,
+        });
+      } else {
+        clearInterval(countdownInterval);
+        room.status = 'countdown';
+        this.showWait(roomId);
+      }
+    }, 1000);
+  }
+
+  showWait(roomId: string) {
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+
+    room.status = 'wait';
+    this.io.to(roomId).emit('showWait', { message: 'WAIT...' });
+
+    const randomDelay = Math.floor(Math.random() * 6000) + 2000; // 2-8 seconds
+    setTimeout(() => {
+      const greenTime = Date.now();
+      room.status = 'green';
+      room.setGreenTimestamp(greenTime);
+      this.io.to(roomId).emit('showGreen', { timestamp: greenTime });
+    }, randomDelay);
+  }
+
+  handleTap(roomId: string, socketId: string, clientTimestamp: number) {
+    const room = this.rooms.get(roomId);
+    if (!room || (room.status !== 'wait' && room.status !== 'green')) return;
+
+    // Disqualify players who tap during the WAIT (red) phase
+    if (room.status === 'wait') {
+      room.disqualifyPlayer(socketId);
+      this.io.to(socketId).emit('error', { message: 'Too early! Wait for green.' });
+      return;
+    }
+
+    const serverTimestamp = Date.now();
+    const player = room.players.get(socketId);
+    if (!player || player.disqualified) return;
+
+    if (this.antiCheat.isUnrealistic(serverTimestamp - room.greenTimestamp)) {
+      console.log(
+        `Suspicious reaction time for ${player.pubkey}: ${serverTimestamp - room.greenTimestamp}ms`
+      );
+    }
+
+    room.recordTap(socketId, serverTimestamp);
+    this.endGame(roomId, socketId);
+  }
+
+  async endGame(roomId: string, winnerSocketId: string | null) {
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+
+    room.status = 'finished';
+    const winner = winnerSocketId ? room.players.get(winnerSocketId) : room.getWinner();
+
+    const results = Array.from(room.players.values()).map((player) => ({
+      pubkey: player.pubkey,
+      tapTime: player.tapTime,
+      reactionTime: player.reactionTime,
+    }));
+
+    // Track winner for payout handshake
+    room.winnerSocketId = winnerSocketId;
+    room.winnerPubkey = winner?.pubkey || null;
+    room.payoutStatus = winner ? 'requested' : 'none';
+
+    this.io.to(roomId).emit('gameEnd', {
+      roomId,
+      winner: winner?.pubkey || null,
+      reactionTime: winner?.reactionTime || 0,
+      prizePool: room.prizePool,
+      results,
+    });
+
+    // Request a BOLT11 invoice from the winner client; RoomManager will complete payout.
+    // For local testing, you can cap payout via TEST_PAYOUT_SATS.
+    if (winnerSocketId && winner) {
+      const cap = Number(process.env.TEST_PAYOUT_SATS || 0);
+      const amountSats = cap > 0 ? Math.min(room.prizePool, cap) : room.prizePool;
+      console.log(
+        `Requesting payout invoice from winner (socket ${winnerSocketId}) for ${amountSats} sats (pool=${room.prizePool}) in room ${roomId}`
+      );
+      this.io.to(winnerSocketId).emit('payoutRequested', { roomId, amountSats });
+    }
+
+    // Clean up room after game ends
+    setTimeout(() => {
+      this.rooms.delete(roomId);
+    }, 5 * 60 * 1000); // 5 minutes
+  }
+}

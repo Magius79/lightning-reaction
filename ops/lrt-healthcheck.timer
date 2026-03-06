@@ -1,0 +1,11 @@
+[Unit]
+Description=Run LRT healthcheck every minute
+
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=60
+AccuracySec=5s
+Unit=lrt-healthcheck.service
+
+[Install]
+WantedBy=timers.target
