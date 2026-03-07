@@ -24,6 +24,8 @@ type Props = {
   amountSats: number | null;
   onClose: () => void;
   onSubmit: (bolt11: string) => void;
+  payoutResult: 'none' | 'success' | 'failed';
+  payoutError: string | null;
 };
 
 type PayoutStatus = 'idle' | 'resolving' | 'submitting' | 'success' | 'error';
@@ -61,11 +63,21 @@ async function resolveToInvoice(lightningAddress: string, amountSats: number): P
   return invoiceData.pr;
 }
 
-export default function PayoutModal({ visible, roomId, amountSats, onClose, onSubmit }: Props) {
+export default function PayoutModal({ visible, roomId, amountSats, onClose, onSubmit, payoutResult, payoutError }: Props) {
   const [payoutStatus, setPayoutStatus] = useState<PayoutStatus>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [bolt11, setBolt11] = useState('');
   const [lightningAddress, setLightningAddress] = useState<string | null>(null);
+
+  // React to actual payout result from WebSocket
+  useEffect(() => {
+    if (payoutResult === 'success') {
+      setPayoutStatus('success');
+    } else if (payoutResult === 'failed') {
+      setErrorMsg(payoutError || 'Payout failed');
+      setPayoutStatus('error');
+    }
+  }, [payoutResult, payoutError]);
 
   // Load stored lightning address when modal opens
   useEffect(() => {
@@ -97,10 +109,6 @@ export default function PayoutModal({ visible, roomId, amountSats, onClose, onSu
 
       setPayoutStatus('submitting');
       onSubmit(invoice);
-
-      // Success state is set by the parent via payoutSent WS event,
-      // but we optimistically show it here after a short delay
-      setTimeout(() => setPayoutStatus('success'), 1000);
     } catch (e: any) {
       setErrorMsg(e?.message ?? String(e));
       setPayoutStatus('error');
@@ -130,7 +138,6 @@ export default function PayoutModal({ visible, roomId, amountSats, onClose, onSu
 
     setPayoutStatus('submitting');
     onSubmit(trimmed);
-    setTimeout(() => setPayoutStatus('success'), 1000);
   };
 
   const title = amountSats ? `You won ${amountSats} sats! ⚡` : 'You won!';
