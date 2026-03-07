@@ -72,9 +72,9 @@ export class GameEngine {
     const player = room.players.get(socketId);
     if (!player || player.disqualified) return;
 
-    if (this.antiCheat.isUnrealistic(serverTimestamp - room.greenTimestamp)) {
+    if (room.greenTimestamp && this.antiCheat.isUnrealistic(serverTimestamp - room.greenTimestamp)) {
       console.log(
-        `Suspicious reaction time for ${player.pubkey}: ${serverTimestamp - room.greenTimestamp}ms`
+        `Suspicious reaction time for ${player.pubkey}: ${serverTimestamp - (room.greenTimestamp ?? 0)}ms`
       );
     }
 

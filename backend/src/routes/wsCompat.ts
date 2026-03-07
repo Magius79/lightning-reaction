@@ -58,4 +58,3 @@ wsCompatRouter.post('/payout', async (req, res, next) => {
     next(e);
   }
 });
-# force rebuild
