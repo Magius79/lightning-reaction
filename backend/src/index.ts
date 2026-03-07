@@ -106,6 +106,9 @@ app.get('/health', async (_req, res) => {
 // Liveness: process is up (no dependency checks)
 app.get('/healthz', (_req, res) => res.status(200).send('ok'));
 
+// Trust one proxy hop (Railway's reverse proxy)
+app.set('trust proxy', 1);
+
 app.use(
   rateLimit({
     windowMs: 60_000,
