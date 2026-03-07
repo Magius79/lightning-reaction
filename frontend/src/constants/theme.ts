@@ -9,10 +9,10 @@ export const COLORS = {
 };
 
 // Backend API (Express)
-export const API_URL = 'https://api.lrtgame.cloud';
+export const API_URL = 'https://lightning-reaction-production-98af.up.railway.app';
 
 // WebSocket Server (Socket.IO). Use https URL; the client will upgrade to WebSocket.
-export const WS_URL = 'wss://amiable-victory-production-4af7.up.railway.app';
+export const WS_URL = 'wss://websocket-production-64fc.up.railway.app';
 
 // Notes:
 // - For Android Emulator: http://10.0.2.2:<port>
