@@ -17,11 +17,11 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "foregroundImage": "./assets/lightning-reaction-icon.png",
+        "backgroundColor": "#0a0a14"
       },
       "package": "com.magius.lightningreaction",
-      "versionCode": "2",
+      "versionCode": 3,
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
