@@ -7,9 +7,10 @@ import {
   Animated,
   Alert,
   Dimensions,
+  AppState,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { COLORS, API_URL } from '../constants/theme';
+import { COLORS } from '../constants/theme';
 import { wsService } from '../services/websocket';
 import { X, Users } from 'lucide-react-native';
 import PaymentModal from '../components/PaymentModal';
@@ -40,18 +41,27 @@ const GameScreen = ({ navigation }: any) => {
   // 0: dark, 1: red (wait), 2: green (tap)
   const bgAnim = useRef(new Animated.Value(0)).current;
   const currentRoomId = useRef<string | null>(null);
+  const joinedAt = useRef<number>(0);
+  const statusRef = useRef<GameStatus>('paying');
+  const ROOM_TIMEOUT_MS = 5 * 60 * 1000;
 
   const resetForNewRound = () => {
     setPlayers([]);
     setCountdown(0);
     setWinnerPubkey(null);
     currentRoomId.current = null;
+    joinedAt.current = 0;
     Animated.timing(bgAnim, {
       toValue: 0,
       duration: 150,
       useNativeDriver: false,
     }).start();
   };
+
+  // Keep statusRef in sync for use in socket callbacks
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   useEffect(() => {
     // Load pubkey early (avoid races)
@@ -154,23 +164,20 @@ const GameScreen = ({ navigation }: any) => {
     wsService.on('roomTimeout', onRoomTimeout);
     wsService.on('error', onWsError);
 
-    // On socket reconnect, check if room still exists (may have timed out while phone slept)
-    const onReconnect = async () => {
+    // On socket reconnect, check if room has timed out (phone may have been asleep)
+    const onReconnect = () => {
       const rid = currentRoomId.current;
-      if (!rid) return;
+      if (!rid || !joinedAt.current) return;
 
-      try {
-        const resp = await fetch(`${API_URL}/api/rooms/${rid}`);
-        if (!resp.ok) {
-          // Room gone — server timed it out while we were asleep
-          Alert.alert(
-            'Room Timed Out',
-            'No opponents joined. You have a free credit for your next game.',
-            [{ text: 'OK', onPress: () => navigation.goBack() }]
-          );
-        }
-      } catch {
-        // Network error — stay in room, will retry on next reconnect
+      const elapsed = Date.now() - joinedAt.current;
+      if (elapsed >= ROOM_TIMEOUT_MS && statusRef.current === 'waiting') {
+        currentRoomId.current = null;
+        joinedAt.current = 0;
+        Alert.alert(
+          'Room Timed Out',
+          'No opponents joined. You have a free credit for your next game.',
+          [{ text: 'OK', onPress: () => navigation.goBack() }]
+        );
       }
     };
     wsService.on('connect', onReconnect);
@@ -194,6 +201,27 @@ const GameScreen = ({ navigation }: any) => {
       wsService.disconnect();
     };
   }, []);
+
+  // Also check timeout when app comes back to foreground (phone wake)
+  useEffect(() => {
+    const handleAppState = (nextState: string) => {
+      if (nextState === 'active' && currentRoomId.current && joinedAt.current) {
+        const elapsed = Date.now() - joinedAt.current;
+        if (elapsed >= ROOM_TIMEOUT_MS && statusRef.current === 'waiting') {
+          currentRoomId.current = null;
+          joinedAt.current = 0;
+          Alert.alert(
+            'Room Timed Out',
+            'No opponents joined. You have a free credit for your next game.',
+            [{ text: 'OK', onPress: () => navigation.goBack() }]
+          );
+        }
+      }
+    };
+
+    const sub = AppState.addEventListener('change', handleAppState);
+    return () => sub.remove();
+  }, [navigation]);
 
   const handleTap = () => {
     if (status === 'ready' || status === 'wait') {
@@ -280,6 +308,7 @@ const GameScreen = ({ navigation }: any) => {
           setShowPayment(false);
           setStatus('waiting');
           currentRoomId.current = roomId;
+          joinedAt.current = Date.now();
 
           // joinRoom expects { pubkey, paymentHash }
           wsService.joinRoom(pubkey || 'anon', paymentHash);
