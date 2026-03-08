@@ -253,6 +253,12 @@ export class RoomManager {
       return;
     }
 
+    // Non-explicit disconnect on finished game with pending payout: keep room alive
+    if (!explicit && room.status === 'finished' && room.payoutStatus !== 'paid') {
+      console.log(`[RoomManager] Socket ${socket.id} disconnected (reconnect?) — keeping finished room ${roomId} alive for payout`);
+      return;
+    }
+
     // Explicit leave while waiting: credit the player and clean up
     if (explicit && player && room.status === 'waiting') {
       try {
@@ -280,8 +286,13 @@ export class RoomManager {
     });
 
     if (room.getPlayerCount() === 0) {
-      this.clearRoomTimeout(roomId);
-      this.rooms.delete(roomId);
+      // Don't delete rooms with pending payouts
+      if (room.status === 'finished' && room.payoutStatus && room.payoutStatus !== 'paid' && room.payoutStatus !== 'none') {
+        console.log(`[RoomManager] Room ${roomId} empty but payout pending — keeping alive`);
+      } else {
+        this.clearRoomTimeout(roomId);
+        this.rooms.delete(roomId);
+      }
     } else if (room.status !== 'waiting' && room.status !== 'finished' && room.getPlayerCount() < 2) {
       this.gameEngine.endGame(roomId, null);
     }
