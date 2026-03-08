@@ -218,7 +218,15 @@ export class RoomManager {
     if (!room) return;
 
     const player = room.players.get(socket.id);
-    if (player && !player.paid) {
+    if (player && room.status === 'waiting') {
+      // Game hasn't started — credit the player for their next game
+      try {
+        await axios.post(`${this.BACKEND_API}/api/rooms/credit`, { pubkey: player.pubkey });
+        console.log(`[RoomManager] Credited early-leaver ${player.pubkey}`);
+      } catch (error) {
+        console.error('Credit error:', error);
+      }
+    } else if (player && !player.paid) {
       try {
         await axios.post(`${this.BACKEND_API}/refund`, { pubkey: player.pubkey });
       } catch (error) {
