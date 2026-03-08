@@ -1,4 +1,5 @@
 import { Server } from 'socket.io';
+import axios from 'axios';
 import { Room } from '../rooms/Room';
 import { AntiCheat } from './AntiCheat';
 
@@ -6,6 +7,7 @@ export class GameEngine {
   private io: Server;
   private rooms: Map<string, Room>;
   private antiCheat: AntiCheat;
+  private readonly BACKEND_API = process.env.BACKEND_API_URL || 'http://localhost:4000';
   // Note: backend API calls (verify-payment, payout, refund) are handled by RoomManager.
 
   constructor(io: Server, rooms: Map<string, Room>) {
@@ -107,6 +109,19 @@ export class GameEngine {
       prizePool: room.prizePool,
       results,
     });
+
+    // Update player stats in the backend
+    try {
+      const statsPayload = Array.from(room.players.values()).map((player) => ({
+        pubkey: player.pubkey,
+        won: player.pubkey === winner?.pubkey,
+        reactionTime: player.reactionTime ?? null,
+      }));
+      await axios.post(`${this.BACKEND_API}/api/rooms/update-stats`, { players: statsPayload });
+      console.log(`[GameEngine] Updated stats for ${statsPayload.length} players in room ${roomId}`);
+    } catch (e: any) {
+      console.error('[GameEngine] Failed to update stats:', e?.message);
+    }
 
     // Request a BOLT11 invoice from the winner client; RoomManager will complete payout.
     // For local testing, you can cap payout via TEST_PAYOUT_SATS.

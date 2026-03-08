@@ -81,3 +81,30 @@ export function usePlayerCredit(pubkey: string): void {
   const db = getDb();
   db.prepare('UPDATE players SET credits = credits - 1 WHERE pubkey = ? AND credits > 0').run(pubkey);
 }
+
+export function updatePlayerStats(pubkey: string, won: boolean, reactionTime: number | null): void {
+  const db = getDb();
+  if (won) {
+    db.prepare(
+      `UPDATE players SET
+        games_played = games_played + 1,
+        games_won = games_won + 1,
+        avg_reaction_time = CASE
+          WHEN avg_reaction_time IS NULL THEN ?
+          ELSE (avg_reaction_time * games_played + ?) / (games_played + 1)
+        END
+      WHERE pubkey = ?`
+    ).run(reactionTime, reactionTime, pubkey);
+  } else {
+    db.prepare(
+      `UPDATE players SET
+        games_played = games_played + 1,
+        avg_reaction_time = CASE
+          WHEN ? IS NULL THEN avg_reaction_time
+          WHEN avg_reaction_time IS NULL THEN ?
+          ELSE (avg_reaction_time * games_played + ?) / (games_played + 1)
+        END
+      WHERE pubkey = ?`
+    ).run(reactionTime, reactionTime, reactionTime, pubkey);
+  }
+}

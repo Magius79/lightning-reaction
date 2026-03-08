@@ -1,25 +1,56 @@
-import React, { useState } from 'react';
-import { StyleSheet, Text, View, FlatList, TouchableOpacity, Image } from 'react-native';
-import { COLORS } from '../constants/theme';
-import { Trophy, ArrowLeft, RefreshCw } from 'lucide-react-native';
+import React, { useEffect, useState, useCallback } from 'react';
+import { StyleSheet, Text, View, FlatList } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { COLORS, API_URL } from '../constants/theme';
+import { Trophy } from 'lucide-react-native';
 
-const MOCK_LEADERBOARD = [
-  { id: '1', name: 'Satoshi_Nakamoto', wins: 42, avgMs: 185 },
-  { id: '2', name: 'ReactionGod', wins: 38, avgMs: 192 },
-  { id: '3', name: 'Zapper99', wins: 31, avgMs: 205 },
-  { id: '4', name: 'LightningFast', wins: 25, avgMs: 215 },
-  { id: '5', name: 'BitRunner', wins: 22, avgMs: 218 },
-  { id: '6', name: 'NoLagNode', wins: 19, avgMs: 225 },
-  { id: '7', name: 'PlebOne', wins: 15, avgMs: 232 },
-  { id: '8', name: 'FastFingers', wins: 12, avgMs: 240 },
-  { id: '9', name: 'Me', wins: 3, avgMs: 245, isMe: true },
-  { id: '10', name: 'SlowPoke', wins: 1, avgMs: 450 },
-];
+type LeaderboardEntry = {
+  pubkey: string;
+  displayName: string;
+  gamesWon: number;
+  avgReactionTime: number | null;
+  totalWinnings: number;
+  isMe: boolean;
+};
 
 const LeaderboardScreen = ({ navigation }: any) => {
+  const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  const renderItem = ({ item, index }: any) => (
+  const fetchLeaderboard = useCallback(async () => {
+    try {
+      const myPubkey = await AsyncStorage.getItem('user_pubkey');
+      const resp = await fetch(`${API_URL}/api/leaderboard`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+
+      const mapped: LeaderboardEntry[] = (data || []).map((entry: any) => ({
+        pubkey: entry.pubkey,
+        displayName: `${entry.pubkey.slice(0, 12)}…${entry.pubkey.slice(-4)}`,
+        gamesWon: entry.gamesWon ?? 0,
+        avgReactionTime: entry.avgReactionTime ? Math.round(entry.avgReactionTime) : null,
+        totalWinnings: entry.totalWinnings ?? 0,
+        isMe: entry.pubkey === myPubkey,
+      }));
+
+      setEntries(mapped);
+    } catch {
+      // Keep existing data
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchLeaderboard().finally(() => setLoading(false));
+  }, [fetchLeaderboard]);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await fetchLeaderboard();
+    setRefreshing(false);
+  };
+
+  const renderItem = ({ item, index }: { item: LeaderboardEntry; index: number }) => (
     <View style={[styles.item, item.isMe && styles.meItem]}>
       <View style={styles.rankContainer}>
         {index < 3 ? (
@@ -28,14 +59,14 @@ const LeaderboardScreen = ({ navigation }: any) => {
           <Text style={styles.rankText}>{index + 1}</Text>
         )}
       </View>
-      
+
       <View style={styles.nameContainer}>
-        <Text style={[styles.name, item.isMe && styles.meText]}>{item.name}</Text>
-        <Text style={styles.stats}>{item.wins} wins</Text>
+        <Text style={[styles.name, item.isMe && styles.meText]}>{item.isMe ? 'You' : item.displayName}</Text>
+        <Text style={styles.stats}>{item.gamesWon} wins</Text>
       </View>
 
       <View style={styles.scoreContainer}>
-        <Text style={styles.ms}>{item.avgMs}ms</Text>
+        <Text style={styles.ms}>{item.avgReactionTime ?? '—'}ms</Text>
         <Text style={styles.avgLabel}>average</Text>
       </View>
     </View>
@@ -43,14 +74,25 @@ const LeaderboardScreen = ({ navigation }: any) => {
 
   return (
     <View style={styles.container}>
-      <FlatList
-        data={MOCK_LEADERBOARD}
-        keyExtractor={(item) => item.id}
-        renderItem={renderItem}
-        contentContainerStyle={styles.list}
-        refreshing={refreshing}
-        onRefresh={() => {}}
-      />
+      {loading ? (
+        <View style={styles.emptyContainer}>
+          <Text style={styles.emptyText}>Loading…</Text>
+        </View>
+      ) : entries.length === 0 ? (
+        <View style={styles.emptyContainer}>
+          <Text style={styles.emptyText}>No games played yet!</Text>
+          <Text style={styles.emptySubText}>Play a game to appear on the leaderboard.</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={entries}
+          keyExtractor={(item) => item.pubkey}
+          renderItem={renderItem}
+          contentContainerStyle={styles.list}
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+        />
+      )}
     </View>
   );
 };
@@ -113,6 +155,23 @@ const styles = StyleSheet.create({
   avgLabel: {
     color: COLORS.textSecondary,
     fontSize: 10,
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 40,
+  },
+  emptyText: {
+    color: COLORS.text,
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  emptySubText: {
+    color: COLORS.textSecondary,
+    fontSize: 14,
+    marginTop: 8,
+    textAlign: 'center',
   },
 });
 

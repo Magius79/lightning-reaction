@@ -1,80 +1,133 @@
-import { v4 as uuidv4 } from 'uuid';
-import { getDb } from '../config/database';
+import { Router } from 'express';
+import { z } from 'zod';
+import { parseBody } from '../utils/validation';
+import { getOrCreatePlayer, getPlayerCredits, addPlayerCredit, usePlayerCredit, updatePlayerStats } from '../services/player';
+import { checkInvoice, createInvoice } from '../services/lightning';
 import { env } from '../config/env';
+import {
+  getOrCreateOpenRoom,
+  getRoomState,
+  markRoomPlayerPaidByHash,
+  setRoomPlayerPaymentHash,
+  upsertRoomPlayer
+} from '../services/rooms';
+import { confirmByHash, createPendingEntry } from '../services/transactions';
 
-export type RoomStatus = 'open' | 'running' | 'closed';
+export const roomsRouter = Router();
 
-export function getOrCreateOpenRoom(): { id: string; status: RoomStatus; created_at: number } {
-  const db = getDb();
-  const room = db
-    .prepare("SELECT * FROM rooms WHERE status = 'open' ORDER BY created_at DESC LIMIT 1")
-    .get() as any;
-  if (room) return room;
+roomsRouter.post('/join', async (req, res, next) => {
+  try {
+    const body = parseBody(z.object({ pubkey: z.string().min(16) }), req.body);
 
-  const now = Date.now();
-  const id = uuidv4();
-  db.prepare('INSERT INTO rooms (id, status, created_at) VALUES (?, ?, ?)').run(id, 'open', now);
-  return { id, status: 'open', created_at: now };
-}
+    // ensure player exists
+    getOrCreatePlayer(body.pubkey);
 
-export function upsertRoomPlayer(roomId: string, pubkey: string) {
-  const db = getDb();
-  const now = Date.now();
-  db.prepare(
-    `INSERT INTO room_players (room_id, pubkey, paid, payment_hash, created_at)
-     VALUES (?, ?, 0, NULL, ?)
-     ON CONFLICT(room_id, pubkey) DO NOTHING`
-  ).run(roomId, pubkey, now);
-}
+    const room = getOrCreateOpenRoom();
+    upsertRoomPlayer(room.id, body.pubkey);
 
-export function setRoomPlayerPaymentHash(roomId: string, pubkey: string, paymentHash: string) {
-  const db = getDb();
-  db.prepare(
-    `UPDATE room_players
-     SET payment_hash = ?
-     WHERE room_id = ? AND pubkey = ?`
-  ).run(paymentHash, roomId, pubkey);
-}
+    // Check if player has a credit from a timed-out room
+    const credits = getPlayerCredits(body.pubkey);
+    if (credits > 0) {
+      usePlayerCredit(body.pubkey);
 
-export function markRoomPlayerPaid(roomId: string, pubkey: string, paymentHash: string) {
-  const db = getDb();
-  db.prepare(
-    `UPDATE room_players
-     SET paid = 1, payment_hash = ?
-     WHERE room_id = ? AND pubkey = ?`
-  ).run(paymentHash, roomId, pubkey);
-}
+      // Generate a fake payment hash for the credit entry so the flow works
+      const creditHash = `credit_${Date.now()}_${body.pubkey.slice(0, 8)}`;
+      setRoomPlayerPaymentHash(room.id, body.pubkey, creditHash);
+      markRoomPlayerPaidByHash(creditHash);
 
-export function markRoomPlayerPaidByHash(paymentHash: string) {
-  const db = getDb();
-  db.prepare(
-    `UPDATE room_players
-     SET paid = 1
-     WHERE payment_hash = ?`
-  ).run(paymentHash);
-}
+      console.log('[rooms/join] using credit', { roomId: room.id, pubkey: body.pubkey, creditHash });
 
-export function getRoomState(roomId: string) {
-  const db = getDb();
-  const room = db.prepare('SELECT * FROM rooms WHERE id = ?').get(roomId) as any;
-  if (!room) return null;
+      return res.json({ invoice: null, roomId: room.id, paymentHash: creditHash, credit: true });
+    }
 
-  const players = db
-    .prepare(
-      `SELECT rp.pubkey, rp.paid, rp.payment_hash as paymentHash
-       FROM room_players rp
-       WHERE rp.room_id = ?
-       ORDER BY rp.created_at ASC`
-    )
-    .all(roomId) as Array<{ pubkey: string; paid: number; paymentHash: string | null }>;
+    const inv = await createInvoice({
+      amountSats: env.ENTRY_FEE,
+      memo: env.LIGHTNING_MEMO,
+      expirySeconds: env.INVOICE_EXPIRY_SECONDS
+    });
 
-  const paidCount = players.filter((p) => p.paid === 1).length;
-  const prizePool = Math.floor(paidCount * env.ENTRY_FEE * (1 - env.HOUSE_EDGE));
+    // Helpful for debugging polling flows
+    console.log('[rooms/join] created invoice', { roomId: room.id, pubkey: body.pubkey, paymentHash: inv.paymentHash });
 
-  return {
-    id: room.id,
-    status: room.status,
-    players: players.map((p) => ({ ...p, paid: !!p.paid })),
-    prizePool
-  };
-}
+    createPendingEntry(body.pubkey, env.ENTRY_FEE, inv.paymentHash);
+
+    // Store the payment_hash on the room_player row immediately so webhooks can
+    // confirm payment using only the LNbits payment_hash (no roomId/pubkey needed).
+    setRoomPlayerPaymentHash(room.id, body.pubkey, inv.paymentHash);
+
+    res.json({ invoice: inv.paymentRequest, roomId: room.id, paymentHash: inv.paymentHash });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Single-shot payment check — client polls this every 2s via auto-polling in PaymentModal.
+// Keeping this stateless avoids holding open HTTP connections while waiting for LNbits.
+roomsRouter.post('/confirm', async (req, res, next) => {
+  try {
+    const body = parseBody(z.object({ paymentHash: z.string().min(10) }), req.body);
+
+    // Credit-based entries are already confirmed — no need to check LNbits
+    if (body.paymentHash.startsWith('credit_')) {
+      return res.json({ ok: true, paid: true });
+    }
+
+    const { paid } = await checkInvoice(body.paymentHash);
+    if (paid) {
+      confirmByHash('entry', body.paymentHash);
+      markRoomPlayerPaidByHash(body.paymentHash);
+      return res.json({ ok: true, paid: true });
+    }
+
+    res.status(202).json({ ok: true, paid: false });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Update player stats after a game (called by WebSocket server)
+roomsRouter.post('/update-stats', async (req, res, next) => {
+  try {
+    const body = parseBody(
+      z.object({
+        players: z.array(z.object({
+          pubkey: z.string().min(16),
+          won: z.boolean(),
+          reactionTime: z.number().nullable(),
+        })),
+      }),
+      req.body
+    );
+
+    for (const p of body.players) {
+      updatePlayerStats(p.pubkey, p.won, p.reactionTime);
+    }
+
+    console.log('[rooms/update-stats] updated stats for', body.players.length, 'players');
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Credit a player (called by WebSocket server when room times out)
+roomsRouter.post('/credit', async (req, res, next) => {
+  try {
+    const body = parseBody(z.object({ pubkey: z.string().min(16) }), req.body);
+    addPlayerCredit(body.pubkey);
+    console.log('[rooms/credit] credited player', { pubkey: body.pubkey });
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+roomsRouter.get('/:id', (req, res, next) => {
+  try {
+    const state = getRoomState(req.params.id);
+    if (!state) return res.status(404).json({ error: 'Room not found' });
+    res.json(state);
+  } catch (e) {
+    next(e);
+  }
+});

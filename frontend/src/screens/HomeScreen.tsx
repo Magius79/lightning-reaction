@@ -1,21 +1,155 @@
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, ScrollView, RefreshControl } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { COLORS } from '../constants/theme';
+import { COLORS, API_URL } from '../constants/theme';
 import { Zap, Trophy, BarChart2, Settings, User } from 'lucide-react-native';
 
+// Decode npub bech32 to hex pubkey
+function npubToHex(npub: string): string | null {
+  try {
+    if (!npub.startsWith('npub1')) return null;
+    const CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+    const data = npub.slice(5); // remove 'npub1'
+    const values: number[] = [];
+    for (const c of data) {
+      const v = CHARSET.indexOf(c);
+      if (v === -1) return null;
+      values.push(v);
+    }
+    // Convert 5-bit groups to 8-bit (skip checksum last 6 values)
+    const payload = values.slice(0, values.length - 6);
+    let acc = 0;
+    let bits = 0;
+    const bytes: number[] = [];
+    for (const v of payload) {
+      acc = (acc << 5) | v;
+      bits += 5;
+      if (bits >= 8) {
+        bits -= 8;
+        bytes.push((acc >> bits) & 0xff);
+      }
+    }
+    return bytes.map((b) => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return null;
+  }
+}
+
+// Fetch Nostr profile (kind 0) from relay
+function fetchNostrProfile(hexPubkey: string, timeoutMs = 5000): Promise<{ name?: string; display_name?: string } | null> {
+  return new Promise((resolve) => {
+    try {
+      const ws = new WebSocket('wss://relay.damus.io');
+      const timer = setTimeout(() => {
+        ws.close();
+        resolve(null);
+      }, timeoutMs);
+
+      ws.onopen = () => {
+        const subId = 'profile_' + Date.now();
+        ws.send(JSON.stringify(['REQ', subId, { kinds: [0], authors: [hexPubkey], limit: 1 }]));
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg[0] === 'EVENT' && msg[2]?.content) {
+            const profile = JSON.parse(msg[2].content);
+            clearTimeout(timer);
+            ws.close();
+            resolve(profile);
+          } else if (msg[0] === 'EOSE') {
+            clearTimeout(timer);
+            ws.close();
+            resolve(null);
+          }
+        } catch {
+          // ignore parse errors
+        }
+      };
+
+      ws.onerror = () => {
+        clearTimeout(timer);
+        resolve(null);
+      };
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
 const HomeScreen = ({ navigation }: any) => {
+  const [displayName, setDisplayName] = useState('');
   const [stats, setStats] = useState({
-    played: 12,
-    won: 3,
-    avgReaction: 245,
+    played: 0,
+    won: 0,
+    avgReaction: 0,
   });
   const [refreshing, setRefreshing] = useState(false);
+  const [topPlayers, setTopPlayers] = useState<any[]>([]);
 
-  const onRefresh = () => {
+  const loadProfile = async () => {
+    try {
+      const pubkey = await AsyncStorage.getItem('user_pubkey');
+      if (!pubkey) return;
+
+      // Show shortened npub immediately as fallback
+      setDisplayName(`${pubkey.slice(0, 12)}…${pubkey.slice(-4)}`);
+
+      // Try to fetch Nostr display name
+      const hex = npubToHex(pubkey);
+      if (hex) {
+        const profile = await fetchNostrProfile(hex);
+        const name = profile?.display_name || profile?.name;
+        if (name) {
+          setDisplayName(name);
+        }
+      }
+    } catch {
+      setDisplayName('Player');
+    }
+  };
+
+  const fetchStats = async () => {
+    try {
+      const pubkey = await AsyncStorage.getItem('user_pubkey');
+      if (!pubkey) return;
+      const resp = await fetch(`${API_URL}/api/players/${pubkey}`);
+      if (resp.ok) {
+        const data = await resp.json();
+        setStats({
+          played: data.games_played ?? 0,
+          won: data.games_won ?? 0,
+          avgReaction: data.avg_reaction_time ? Math.round(data.avg_reaction_time) : 0,
+        });
+      }
+    } catch {
+      // Keep defaults
+    }
+  };
+
+  const fetchLeaderboard = async () => {
+    try {
+      const resp = await fetch(`${API_URL}/api/leaderboard?limit=3`);
+      if (resp.ok) {
+        const data = await resp.json();
+        setTopPlayers(data || []);
+      }
+    } catch {
+      // Keep empty
+    }
+  };
+
+  useEffect(() => {
+    loadProfile();
+    fetchStats();
+    fetchLeaderboard();
+  }, []);
+
+  const onRefresh = async () => {
     setRefreshing(true);
-    // Fetch stats from backend
-    setTimeout(() => setRefreshing(false), 1000);
+    await Promise.all([fetchStats(), fetchLeaderboard()]);
+    setRefreshing(false);
   };
 
   const logout = async () => {
@@ -35,7 +169,7 @@ const HomeScreen = ({ navigation }: any) => {
           </View>
           <View>
             <Text style={styles.welcomeText}>Welcome back,</Text>
-            <Text style={styles.pubkeyText}>Lightning Legend</Text>
+            <Text style={styles.pubkeyText}>{displayName || 'Player'}</Text>
           </View>
         </View>
         <TouchableOpacity onPress={logout}>
@@ -68,13 +202,17 @@ const HomeScreen = ({ navigation }: any) => {
           </TouchableOpacity>
         </View>
         
-        {[1, 2, 3].map((i) => (
-          <View key={i} style={styles.leaderboardItem}>
-            <Text style={styles.rank}>#{i}</Text>
-            <Text style={styles.name}>Player_{i}42</Text>
-            <Text style={styles.score}>210ms</Text>
+        {topPlayers.length > 0 ? topPlayers.map((p: any, i: number) => (
+          <View key={p.pubkey} style={styles.leaderboardItem}>
+            <Text style={styles.rank}>#{i + 1}</Text>
+            <Text style={styles.name}>{`${p.pubkey.slice(0, 10)}…`}</Text>
+            <Text style={styles.score}>{p.avgReactionTime ? `${Math.round(p.avgReactionTime)}ms` : '—'}</Text>
           </View>
-        ))}
+        )) : (
+          <View style={styles.leaderboardItem}>
+            <Text style={styles.name}>No games played yet</Text>
+          </View>
+        )}
       </View>
     </ScrollView>
   );
