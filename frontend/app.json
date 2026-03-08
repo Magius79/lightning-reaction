@@ -2,7 +2,7 @@
   "expo": {
     "name": "Lightning Reaction",
     "slug": "lightning-reaction",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "orientation": "portrait",
     "icon": "./assets/lightning-reaction-icon.png",
     "userInterfaceStyle": "light",
@@ -21,7 +21,7 @@
         "backgroundColor": "#0a0a14"
       },
       "package": "com.magius.lightningreaction",
-      "versionCode": 4,
+      "versionCode": 5,
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
