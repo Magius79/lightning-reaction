@@ -13,6 +13,86 @@ type LeaderboardEntry = {
   isMe: boolean;
 };
 
+// Decode npub bech32 to hex pubkey
+function npubToHex(npub: string): string | null {
+  try {
+    if (!npub.startsWith('npub1')) return null;
+    const CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+    const data = npub.slice(5);
+    const values: number[] = [];
+    for (const c of data) {
+      const v = CHARSET.indexOf(c);
+      if (v === -1) return null;
+      values.push(v);
+    }
+    const payload = values.slice(0, values.length - 6);
+    let acc = 0;
+    let bits = 0;
+    const bytes: number[] = [];
+    for (const v of payload) {
+      acc = (acc << 5) | v;
+      bits += 5;
+      if (bits >= 8) {
+        bits -= 8;
+        bytes.push((acc >> bits) & 0xff);
+      }
+    }
+    return bytes.map((b) => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return null;
+  }
+}
+
+// Fetch multiple Nostr profiles in one connection
+function fetchNostrProfiles(
+  hexPubkeys: string[],
+  timeoutMs = 6000
+): Promise<Map<string, { name?: string; display_name?: string }>> {
+  return new Promise((resolve) => {
+    const profiles = new Map<string, { name?: string; display_name?: string }>();
+    if (hexPubkeys.length === 0) { resolve(profiles); return; }
+
+    try {
+      const ws = new WebSocket('wss://relay.damus.io');
+      const timer = setTimeout(() => {
+        ws.close();
+        resolve(profiles);
+      }, timeoutMs);
+
+      let eoseReceived = false;
+
+      ws.onopen = () => {
+        const subId = 'lb_' + Date.now();
+        ws.send(JSON.stringify(['REQ', subId, { kinds: [0], authors: hexPubkeys, limit: hexPubkeys.length }]));
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg[0] === 'EVENT' && msg[2]?.content && msg[2]?.pubkey) {
+            const profile = JSON.parse(msg[2].content);
+            profiles.set(msg[2].pubkey, profile);
+          } else if (msg[0] === 'EOSE') {
+            eoseReceived = true;
+            clearTimeout(timer);
+            ws.close();
+            resolve(profiles);
+          }
+        } catch {
+          // ignore parse errors
+        }
+      };
+
+      ws.onerror = () => {
+        clearTimeout(timer);
+        resolve(profiles);
+      };
+    } catch {
+      resolve(profiles);
+    }
+  });
+}
+
 const LeaderboardScreen = ({ navigation }: any) => {
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -25,6 +105,7 @@ const LeaderboardScreen = ({ navigation }: any) => {
       if (!resp.ok) return;
       const data = await resp.json();
 
+      // Initial mapping with shortened npubs
       const mapped: LeaderboardEntry[] = (data || []).map((entry: any) => ({
         pubkey: entry.pubkey,
         displayName: `${entry.pubkey.slice(0, 12)}…${entry.pubkey.slice(-4)}`,
@@ -35,6 +116,28 @@ const LeaderboardScreen = ({ navigation }: any) => {
       }));
 
       setEntries(mapped);
+
+      // Resolve Nostr names in background
+      const hexMap = new Map<string, string>(); // hex -> npub
+      for (const entry of mapped) {
+        const hex = npubToHex(entry.pubkey);
+        if (hex) hexMap.set(hex, entry.pubkey);
+      }
+
+      if (hexMap.size > 0) {
+        const profiles = await fetchNostrProfiles(Array.from(hexMap.keys()));
+
+        setEntries((prev) =>
+          prev.map((entry) => {
+            const hex = npubToHex(entry.pubkey);
+            if (!hex) return entry;
+            const profile = profiles.get(hex);
+            const name = profile?.display_name || profile?.name;
+            if (name) return { ...entry, displayName: name };
+            return entry;
+          })
+        );
+      }
     } catch {
       // Keep existing data
     }
@@ -62,7 +165,9 @@ const LeaderboardScreen = ({ navigation }: any) => {
 
       <View style={styles.nameContainer}>
         <Text style={[styles.name, item.isMe && styles.meText]}>{item.isMe ? 'You' : item.displayName}</Text>
-        <Text style={styles.stats}>{item.gamesWon} wins</Text>
+        <Text style={styles.stats}>
+          {item.gamesWon} win{item.gamesWon !== 1 ? 's' : ''} · {item.totalWinnings} sats
+        </Text>
       </View>
 
       <View style={styles.scoreContainer}>
