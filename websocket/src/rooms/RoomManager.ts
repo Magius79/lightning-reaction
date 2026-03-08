@@ -282,7 +282,7 @@ export class RoomManager {
     if (room.getPlayerCount() === 0) {
       this.clearRoomTimeout(roomId);
       this.rooms.delete(roomId);
-    } else if (room.status !== 'waiting' && room.getPlayerCount() < 2) {
+    } else if (room.status !== 'waiting' && room.status !== 'finished' && room.getPlayerCount() < 2) {
       this.gameEngine.endGame(roomId, null);
     }
   }

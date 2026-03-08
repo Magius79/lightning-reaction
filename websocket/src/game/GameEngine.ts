@@ -88,6 +88,9 @@ export class GameEngine {
     const room = this.rooms.get(roomId);
     if (!room) return;
 
+    // Don't re-run endGame on an already finished room
+    if (room.status === 'finished') return;
+
     room.status = 'finished';
     const winner = winnerSocketId ? room.players.get(winnerSocketId) : room.getWinner();
 
