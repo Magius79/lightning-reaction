@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { parseBody } from '../utils/validation';
-import { getOrCreatePlayer, getPlayerCredits, addPlayerCredit, usePlayerCredit } from '../services/player';
+import { getOrCreatePlayer, getPlayerCredits, addPlayerCredit, usePlayerCredit, updatePlayerStats } from '../services/player';
 import { checkInvoice, createInvoice } from '../services/lightning';
 import { env } from '../config/env';
 import {
@@ -80,6 +80,31 @@ roomsRouter.post('/confirm', async (req, res, next) => {
     }
 
     res.status(202).json({ ok: true, paid: false });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Update player stats after a game (called by WebSocket server)
+roomsRouter.post('/update-stats', async (req, res, next) => {
+  try {
+    const body = parseBody(
+      z.object({
+        players: z.array(z.object({
+          pubkey: z.string().min(16),
+          won: z.boolean(),
+          reactionTime: z.number().nullable(),
+        })),
+      }),
+      req.body
+    );
+
+    for (const p of body.players) {
+      updatePlayerStats(p.pubkey, p.won, p.reactionTime);
+    }
+
+    console.log('[rooms/update-stats] updated stats for', body.players.length, 'players');
+    res.json({ ok: true });
   } catch (e) {
     next(e);
   }
