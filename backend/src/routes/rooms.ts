@@ -67,6 +67,11 @@ roomsRouter.post('/confirm', async (req, res, next) => {
   try {
     const body = parseBody(z.object({ paymentHash: z.string().min(10) }), req.body);
 
+    // Credit-based entries are already confirmed — no need to check LNbits
+    if (body.paymentHash.startsWith('credit_')) {
+      return res.json({ ok: true, paid: true });
+    }
+
     const { paid } = await checkInvoice(body.paymentHash);
     if (paid) {
       confirmByHash('entry', body.paymentHash);
