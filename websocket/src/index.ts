@@ -32,7 +32,7 @@ io.on('connection', (socket) => {
 
   socket.on('joinRoom', (data) => roomManager.handleJoinRoom(socket, data));
   socket.on('tap', (data) => roomManager.handleTap(socket, data));
-  socket.on('leaveRoom', () => roomManager.handleLeaveRoom(socket));
+  socket.on('leaveRoom', () => roomManager.handleLeaveRoom(socket, true));
   socket.on('submitPayoutInvoice', (data) => roomManager.handleSubmitPayoutInvoice(socket, data));
   socket.on('disconnect', () => roomManager.handleDisconnect(socket));
 });

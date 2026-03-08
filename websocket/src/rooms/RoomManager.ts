@@ -191,7 +191,7 @@ export class RoomManager {
 
     console.log(`[RoomManager] Room ${roomId} timed out — crediting ${room.getPlayerCount()} player(s)`);
 
-    // Credit each player via the backend
+    // Credit each player via the backend and notify them directly
     for (const [socketId, player] of room.players) {
       try {
         await axios.post(`${this.BACKEND_API}/api/rooms/credit`, { pubkey: player.pubkey });
@@ -199,19 +199,44 @@ export class RoomManager {
       } catch (e: any) {
         console.error(`[RoomManager] Failed to credit player ${player.pubkey}:`, e?.message);
       }
+
+      // Find the socket — might be the original or a reconnected one
+      const sock = this.io.sockets.sockets.get(socketId);
+      if (sock) {
+        sock.emit('roomTimeout', {
+          roomId,
+          message: 'Room timed out — no opponents joined. You have a free credit for your next game.',
+        });
+        sock.leave(roomId);
+      }
+      this.socketRooms.delete(socketId);
     }
 
-    // Notify all clients in the room (handles reconnected sockets with new IDs)
+    // Also emit to the room channel in case any sockets are still joined
     this.io.to(roomId).emit('roomTimeout', {
       roomId,
       message: 'Room timed out — no opponents joined. You have a free credit for your next game.',
     });
 
+    // Find any sockets still mapped to this room (reconnected sockets)
+    for (const [sid, rid] of this.socketRooms) {
+      if (rid === roomId) {
+        const sock = this.io.sockets.sockets.get(sid);
+        if (sock) {
+          sock.emit('roomTimeout', {
+            roomId,
+            message: 'Room timed out — no opponents joined. You have a free credit for your next game.',
+          });
+        }
+        this.socketRooms.delete(sid);
+      }
+    }
+
     // Clean up the room
     this.rooms.delete(roomId);
   }
 
-  async handleLeaveRoom(socket: Socket) {
+  async handleLeaveRoom(socket: Socket, explicit = false) {
     const roomId = this.socketRooms.get(socket.id);
     if (!roomId) return;
 
@@ -221,8 +246,9 @@ export class RoomManager {
     if (!room) return;
 
     const player = room.players.get(socket.id);
-    if (player && room.status === 'waiting') {
-      // Game hasn't started — credit the player for their next game
+
+    // Only credit if the player explicitly left (not a disconnect/reconnect)
+    if (explicit && player && room.status === 'waiting') {
       try {
         await axios.post(`${this.BACKEND_API}/api/rooms/credit`, { pubkey: player.pubkey });
         console.log(`[RoomManager] Credited early-leaver ${player.pubkey}`);
@@ -256,6 +282,7 @@ export class RoomManager {
   }
 
   handleDisconnect(socket: Socket) {
-    this.handleLeaveRoom(socket);
+    // Don't credit on disconnect — could be a reconnection
+    this.handleLeaveRoom(socket, false);
   }
 }
