@@ -48,48 +48,81 @@ function fetchNostrProfiles(
   hexPubkeys: string[],
   timeoutMs = 6000
 ): Promise<Map<string, { name?: string; display_name?: string }>> {
+  const relays = ['wss://relay.damus.io', 'wss://relay.nostr.band', 'wss://nos.lol'];
+
   return new Promise((resolve) => {
     const profiles = new Map<string, { name?: string; display_name?: string }>();
     if (hexPubkeys.length === 0) { resolve(profiles); return; }
 
-    try {
-      const ws = new WebSocket('wss://relay.damus.io');
-      const timer = setTimeout(() => {
-        ws.close();
-        resolve(profiles);
-      }, timeoutMs);
+    let resolved = false;
+    let attempts = 0;
 
-      let eoseReceived = false;
+    const tryRelay = (relayUrl: string) => {
+      try {
+        const ws = new WebSocket(relayUrl);
+        const timer = setTimeout(() => {
+          ws.close();
+          if (!resolved) {
+            attempts++;
+            if (attempts < relays.length) {
+              tryRelay(relays[attempts]);
+            } else {
+              resolved = true;
+              resolve(profiles);
+            }
+          }
+        }, timeoutMs);
 
-      ws.onopen = () => {
-        const subId = 'lb_' + Date.now();
-        ws.send(JSON.stringify(['REQ', subId, { kinds: [0], authors: hexPubkeys, limit: hexPubkeys.length }]));
-      };
+        ws.onopen = () => {
+          const subId = 'lb_' + Date.now();
+          ws.send(JSON.stringify(['REQ', subId, { kinds: [0], authors: hexPubkeys, limit: hexPubkeys.length }]));
+        };
 
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg[0] === 'EVENT' && msg[2]?.content && msg[2]?.pubkey) {
-            const profile = JSON.parse(msg[2].content);
-            profiles.set(msg[2].pubkey, profile);
-          } else if (msg[0] === 'EOSE') {
-            eoseReceived = true;
-            clearTimeout(timer);
-            ws.close();
+        ws.onmessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg[0] === 'EVENT' && msg[2]?.content && msg[2]?.pubkey) {
+              const profile = JSON.parse(msg[2].content);
+              profiles.set(msg[2].pubkey, profile);
+            } else if (msg[0] === 'EOSE') {
+              clearTimeout(timer);
+              ws.close();
+              if (!resolved) {
+                resolved = true;
+                resolve(profiles);
+              }
+            }
+          } catch {
+            // ignore parse errors
+          }
+        };
+
+        ws.onerror = () => {
+          clearTimeout(timer);
+          if (!resolved) {
+            attempts++;
+            if (attempts < relays.length) {
+              tryRelay(relays[attempts]);
+            } else {
+              resolved = true;
+              resolve(profiles);
+            }
+          }
+        };
+      } catch {
+        if (!resolved) {
+          attempts++;
+          if (attempts < relays.length) {
+            tryRelay(relays[attempts]);
+          } else {
+            resolved = true;
             resolve(profiles);
           }
-        } catch {
-          // ignore parse errors
         }
-      };
+      }
+    };
 
-      ws.onerror = () => {
-        clearTimeout(timer);
-        resolve(profiles);
-      };
-    } catch {
-      resolve(profiles);
-    }
+    tryRelay(relays[0]);
   });
 }
 

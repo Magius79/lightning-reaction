@@ -122,9 +122,9 @@ const HomeScreen = ({ navigation }: any) => {
       if (resp.ok) {
         const data = await resp.json();
         setStats({
-          played: data.games_played ?? 0,
-          won: data.games_won ?? 0,
-          avgReaction: data.avg_reaction_time ? Math.round(data.avg_reaction_time) : 0,
+          played: data.gamesPlayed ?? data.games_played ?? 0,
+          won: data.gamesWon ?? data.games_won ?? 0,
+          avgReaction: (data.avgReactionTime ?? data.avg_reaction_time) ? Math.round(data.avgReactionTime ?? data.avg_reaction_time) : 0,
         });
       }
     } catch {
