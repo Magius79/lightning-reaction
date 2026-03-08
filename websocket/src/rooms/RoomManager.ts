@@ -16,6 +16,7 @@ export class RoomManager {
   // roomId -> winnerPubkey -> resolved
   private payoutInFlight: Set<string> = new Set();
   private roomTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private socketRooms: Map<string, string> = new Map(); // socketId -> roomId
 
   constructor(io: Server) {
     this.io = io;
@@ -38,7 +39,10 @@ export class RoomManager {
       // Enable explicitly via ALLOW_BOT_NO_PAYMENT=1.
       const allowBot = process.env.ALLOW_BOT_NO_PAYMENT === '1' && pubkey.startsWith('bot_');
 
-      if (!allowBot) {
+      // Credit-based entries are pre-verified by the backend
+      const isCredit = paymentHash.startsWith('credit_');
+
+      if (!allowBot && !isCredit) {
         const response = await axios.post(`${this.BACKEND_API}/verify-payment`, { pubkey, paymentHash });
         if (!response.data.verified) {
           socket.emit('error', { message: 'Payment verification failed' });
@@ -59,6 +63,7 @@ export class RoomManager {
       room.addPlayer(socket, pubkey);
       socket.join(roomId);
       room.setPlayerPaid(socket.id);
+      this.socketRooms.set(socket.id, roomId);
 
       this.io.to(roomId).emit('roomUpdated', {
         roomId,
@@ -78,7 +83,7 @@ export class RoomManager {
   }
 
   handleTap(socket: Socket, data: { timestamp: number }) {
-    const roomId = Array.from(socket.rooms).find((r) => r !== socket.id);
+    const roomId = this.socketRooms.get(socket.id);
     if (!roomId) return;
 
     const room = this.rooms.get(roomId);
@@ -194,31 +199,37 @@ export class RoomManager {
       } catch (e: any) {
         console.error(`[RoomManager] Failed to credit player ${player.pubkey}:`, e?.message);
       }
-
-      // Notify the player
-      const sock = this.io.sockets.sockets.get(socketId);
-      if (sock) {
-        sock.emit('roomTimeout', {
-          roomId,
-          message: 'Room timed out — no opponents joined. You have a free credit for your next game.',
-        });
-        sock.leave(roomId);
-      }
     }
+
+    // Notify all clients in the room (handles reconnected sockets with new IDs)
+    this.io.to(roomId).emit('roomTimeout', {
+      roomId,
+      message: 'Room timed out — no opponents joined. You have a free credit for your next game.',
+    });
 
     // Clean up the room
     this.rooms.delete(roomId);
   }
 
   async handleLeaveRoom(socket: Socket) {
-    const roomId = Array.from(socket.rooms).find((r) => r !== socket.id);
+    const roomId = this.socketRooms.get(socket.id);
     if (!roomId) return;
+
+    this.socketRooms.delete(socket.id);
 
     const room = this.rooms.get(roomId);
     if (!room) return;
 
     const player = room.players.get(socket.id);
-    if (player && !player.paid) {
+    if (player && room.status === 'waiting') {
+      // Game hasn't started — credit the player for their next game
+      try {
+        await axios.post(`${this.BACKEND_API}/api/rooms/credit`, { pubkey: player.pubkey });
+        console.log(`[RoomManager] Credited early-leaver ${player.pubkey}`);
+      } catch (error) {
+        console.error('Credit error:', error);
+      }
+    } else if (player && !player.paid) {
       try {
         await axios.post(`${this.BACKEND_API}/refund`, { pubkey: player.pubkey });
       } catch (error) {
