@@ -1,402 +1,221 @@
 # Integration Guide
 
-How the three components (Backend API, WebSocket Server, Frontend) work together.
+## Overview
 
-## Architecture Overview
+Lightning Reaction Tournament consists of three interconnected services:
 
-```
-┌─────────────┐
-│   Frontend  │ (React Native / Expo)
-│  (Android)  │
-└──────┬──────┘
-       │
-       ├─── HTTPS ───────┐
-       │                 │
-       │            ┌────▼────┐
-       │            │ Backend │ (REST API)
-       │            │  API    │ Port 4000
-       │            └────┬────┘
-       │                 │
-       └─── WSS ───┐     │
-                   │     │
-              ┌────▼─────▼─────┐
-              │   WebSocket    │
-              │     Server     │ Port 3001
-              └────────────────┘
-                       │
-                       │
-                  ┌────▼────┐
-                  │ LNbits  │
-                  │   API   │
-                  └─────────┘
-```
+1. **Backend API** (Port 4000) - Express REST API + Lightning payments
+2. **WebSocket Server** (Port 3001) - Real-time game engine
+3. **Frontend App** (Expo) - React Native mobile app
 
-## Component Responsibilities
-
-### Backend API (Port 4000)
-- **Authentication**: Nostr pubkey → JWT token
-- **Player Management**: Profile, stats, history
-- **Lightning Payments**: Invoice generation, webhook handling
-- **Database**: SQLite with room/player/game data
-- **Endpoints**:
-  - `POST /api/auth/login` - Login with Nostr
-  - `GET /api/rooms` - List active rooms
-  - `POST /api/rooms/:id/invoice` - Generate payment invoice
-  - `POST /api/webhook` - LNbits payment webhook
-  - `GET /api/leaderboard` - Global rankings
-  - `GET /api/players/:pubkey` - Player profile
-
-### WebSocket Server (Port 3001)
-- **Real-time Game Logic**: State machine, countdown, winner detection
-- **Room Management**: Create, join, matchmaking queue
-- **Anti-cheat**: Premature tap detection, unrealistic reaction times
-- **Events**:
-  - Client → Server: `joinRoom`, `tap`, `leaveRoom`
-  - Server → Client: `roomJoined`, `playerJoined`, `gameState`, `gameFinished`
-- **Backend Integration**: Calls backend API for payment verification and payouts
-
-### Frontend (Android App)
-- **UI/UX**: Login, home, game screen, leaderboard
-- **WebSocket Client**: Real-time game updates via Socket.io
-- **REST Client**: Authentication, room list, player data
-- **Payment Flow**: Display invoice QR code, wait for confirmation
-
-## Data Flow Diagrams
-
-### 1. Player Login
+## Architecture Flow
 
 ```
-Frontend                Backend
-   │                       │
-   │─── POST /api/auth ───>│
-   │    { pubkey, sig }    │
-   │                       │
-   │<──── { token } ───────│
-   │                       │
-   │ (Store JWT token)     │
+Frontend (Mobile)
+    ↓
+    ├──→ Backend API (REST)     → LNbits (Lightning)
+    └──→ WebSocket Server       → Backend API (payment verification)
 ```
 
-### 2. Join Room & Pay
+## Port Configuration
 
-```
-Frontend              Backend              WebSocket           LNbits
-   │                     │                     │                 │
-   │─ GET /api/rooms ───>│                     │                 │
-   │<─── [rooms] ────────│                     │                 │
-   │                     │                     │                 │
-   │─ POST /rooms/:id/invoice ──>│             │                 │
-   │<─── { invoice, hash } ───────│            │                 │
-   │                     │                     │                 │
-   │ (Show QR code)      │                     │                 │
-   │                     │                     │                 │
-   │─────────────────────────── pay ─────────────────────────────>│
-   │                     │                     │                 │
-   │                     │<──── POST /webhook ─┬─────────────────│
-   │                     │  { hash, paid: true }│                 │
-   │                     │                     │                 │
-   │                     │ (Mark room paid)    │                 │
-   │                     │                     │                 │
-   │─────────────────────┬─ WS: joinRoom ─────>│                 │
-   │                     │  { roomId, token }  │                 │
-   │                     │                     │                 │
-   │                     │                     │─ Verify payment ─>│
-   │                     │<────────────────────│  (Backend API)  │
-   │                     │                     │                 │
-   │<────────────────────┴─ roomJoined ────────│                 │
-```
+| Service | Port | Configurable |
+|---------|------|--------------|
+| Backend API | 4000 | Yes (`.env`) |
+| WebSocket | 3001 | Yes (edit `websocket/src/index.ts`) |
+| Frontend | N/A | Connects to above |
 
-### 3. Game Play
+## Step-by-Step Integration
 
-```
-Frontend                                WebSocket
-   │                                       │
-   │<────── gameState: WAITING ───────────│
-   │  { state, players: [p1, p2] }        │
-   │                                       │
-   │<────── gameState: STARTING ──────────│
-   │  { state, countdown: 3 }             │
-   │                                       │
-   │<────── gameState: COUNTDOWN ─────────│
-   │  { state, secondsLeft: 2 }           │
-   │                                       │
-   │<────── gameState: READY ─────────────│
-   │  { state, greenLightTime }           │
-   │                                       │
-   │─────── tap ─────────────────────────>│
-   │  { tapTime: 1234567890 }             │
-   │                                       │
-   │<────── gameFinished ──────────────────│
-   │  { winner, reactionTime, pot }       │
-```
-
-### 4. Payout
-
-```
-WebSocket           Backend              LNbits
-   │                   │                   │
-   │─ POST /payout ───>│                   │
-   │  { roomId, winner }                   │
-   │                   │                   │
-   │                   │─ Send payment ───>│
-   │                   │  (winner address) │
-   │                   │                   │
-   │                   │<─ { paid: true } ─│
-   │<─ { success } ────│                   │
-```
-
-## Configuration
-
-### Backend Environment Variables
+### 1. Configure Backend
 
 ```bash
-# Railway deployment
+cd lightning-reaction/backend
+cp .env.example .env
+```
+
+Edit `.env`:
+```env
+PORT=4000
+NODE_ENV=development
+CORS_ORIGIN=http://localhost:3001,http://localhost:19006
+JWT_SECRET=your-secret-here-change-me
+DB_PATH=./data/app.sqlite
+
+# LNbits credentials (get from https://legend.lnbits.com)
 LNBITS_URL=https://legend.lnbits.com
-LNBITS_ADMIN_KEY=xxx
-LNBITS_INVOICE_KEY=xxx
-JWT_SECRET=xxx
+LNBITS_ADMIN_KEY=your_admin_key_here
+LNBITS_INVOICE_KEY=your_invoice_key_here
+
 ENTRY_FEE=100
-HOUSE_EDGE=0.1
-DB_PATH=/app/data/app.sqlite
-CORS_ORIGIN=https://your-websocket.railway.app
+HOUSE_EDGE=0.10
+WEBHOOK_SECRET=your-webhook-secret
 ```
 
-### WebSocket Environment Variables
+**Important:** 
+- Add WebSocket port to `CORS_ORIGIN`
+- Add Expo dev server (usually `http://localhost:19006`) to `CORS_ORIGIN`
+- Get real LNbits keys from https://legend.lnbits.com
 
-```bash
-# Railway deployment
+### 2. Configure WebSocket
+
+The WebSocket server needs to know where the backend API is.
+
+Edit `lightning-reaction/websocket/src/index.ts`:
+
+```typescript
+const BACKEND_API_URL = process.env.BACKEND_API_URL || 'http://localhost:4000';
+```
+
+Or create a `.env` file in `websocket/`:
+```env
 PORT=3001
-BACKEND_URL=https://your-backend.railway.app
-CORS_ORIGIN=*
+BACKEND_API_URL=http://localhost:4000
 ```
 
-### Frontend Configuration
+### 3. Configure Frontend
+
+Edit `lightning-reaction/frontend/src/constants/theme.ts`:
 
 ```typescript
-// frontend/src/constants/theme.ts
-export const API_URL = 'https://your-backend.railway.app';
-export const WS_URL = 'wss://your-websocket.railway.app';
+// For iOS Simulator / Android Emulator development:
+export const API_URL = 'http://10.0.2.2:4000'; // Android emulator
+// export const API_URL = 'http://localhost:4000'; // iOS simulator
+export const WS_URL = 'ws://10.0.2.2:3001';
+
+// For physical device on same network:
+// export const API_URL = 'http://192.168.1.X:4000'; // Your computer's IP
+// export const WS_URL = 'ws://192.168.1.X:3001';
 ```
 
-## Service Communication
+**Network Mapping:**
+- `localhost` = iOS simulator only
+- `10.0.2.2` = Android emulator → host machine
+- `192.168.1.X` = Physical device → your computer's local IP
 
-### WebSocket → Backend API Calls
+### 4. Start All Services
 
-The WebSocket server makes these calls to the backend:
+Open **three terminal windows**:
 
-1. **Verify Payment** (before allowing room join):
-   ```typescript
-   GET /api/rooms/:roomId
-   Authorization: Bearer <internal-token>
-   
-   Response: { paid: true, players: [...] }
-   ```
-
-2. **Trigger Payout** (after game finishes):
-   ```typescript
-   POST /api/rooms/:roomId/payout
-   Authorization: Bearer <internal-token>
-   {
-     "winner": "npub1...",
-     "reactionTime": 234,
-     "pot": 900
-   }
-   
-   Response: { success: true, txId: "..." }
-   ```
-
-### Backend → WebSocket Events
-
-The backend can notify the WebSocket server via:
-
-1. **Payment Confirmed** (webhook handler):
-   - Backend stores `room.paid = true`
-   - WebSocket polls or backend pushes event
-   - Alternative: WebSocket subscribes to backend events
-
-2. **Implementation Options**:
-   - **Option A** (current): WebSocket polls backend before accepting join
-   - **Option B**: Backend publishes to Redis, WebSocket subscribes
-   - **Option C**: Backend calls WebSocket webhook endpoint
-
-## Error Handling
-
-### Network Errors
-
-**Frontend → Backend**:
-```typescript
-try {
-  const res = await fetch(`${API_URL}/api/rooms`);
-  if (!res.ok) throw new Error('API error');
-  const data = await res.json();
-} catch (err) {
-  // Show error toast
-  Alert.alert('Error', 'Could not connect to server');
-}
-```
-
-**Frontend → WebSocket**:
-```typescript
-socket.on('connect_error', (err) => {
-  console.error('WebSocket connection failed:', err);
-  // Retry logic or show error
-});
-
-socket.on('disconnect', (reason) => {
-  if (reason === 'io server disconnect') {
-    // Server kicked us out
-    socket.connect();
-  }
-});
-```
-
-### Payment Errors
-
-1. **Invoice Generation Fails**:
-   - Backend returns 500
-   - Frontend shows error, allows retry
-
-2. **Payment Webhook Never Arrives**:
-   - Frontend polls `GET /api/rooms/:id` to check payment status
-   - Timeout after 5 minutes (invoice expiry)
-
-3. **Double Payment**:
-   - Backend idempotency: check `room.paid` before accepting
-   - WebSocket: reject join if already paid
-
-### Game Errors
-
-1. **Premature Tap**:
-   - WebSocket detects tap before green light
-   - Send `{ error: 'TOO_EARLY' }` event
-   - Frontend shows penalty message
-
-2. **Unrealistic Reaction Time**:
-   - WebSocket validates `<50ms` or `>1000ms`
-   - Mark as suspicious, log for review
-   - Continue game but flag player
-
-3. **Player Disconnect Mid-Game**:
-   - WebSocket handles `disconnect` event
-   - If 1 player left, award them the pot
-   - If 0 players, cancel game and refund
-
-## Testing Integration
-
-### Local Testing (All Services)
-
-1. **Start Backend**:
-   ```bash
-   cd backend
-   npm install
-   cp .env.example .env
-   # Edit .env with your LNbits keys
-   npm run dev  # Port 4000
-   ```
-
-2. **Start WebSocket**:
-   ```bash
-   cd websocket
-   npm install
-   cp .env.example .env
-   # Set BACKEND_URL=http://localhost:4000
-   npm run dev  # Port 3001
-   ```
-
-3. **Start Frontend**:
-   ```bash
-   cd frontend
-   npm install
-   npx expo start
-   # Edit theme.ts:
-   #   API_URL = 'http://192.168.x.x:4000'
-   #   WS_URL = 'ws://192.168.x.x:3001'
-   # (Use your local IP, not localhost)
-   ```
-
-### Production Testing (Railway)
-
-1. **Deploy Backend** → `https://backend-xxx.railway.app`
-2. **Deploy WebSocket** → `wss://websocket-xxx.railway.app`
-3. **Update Frontend** with production URLs
-4. **Test Flow**:
-   - Login with Nostr keypair
-   - Create room → get invoice
-   - Pay with real Lightning wallet (or test wallet)
-   - Wait for confirmation
-   - Join room via WebSocket
-   - Play game
-   - Verify payout
-
-## Monitoring
-
-### Backend Logs (Railway)
+**Terminal 1 - Backend:**
 ```bash
-railway logs --service backend
+cd lightning-reaction/backend
+npm install
+npm run dev
 ```
-Look for:
-- `POST /api/webhook` - Payment confirmations
-- `POST /api/rooms/:id/payout` - Payouts sent
-- Errors: `status >= 500`
 
-### WebSocket Logs (Railway)
+**Terminal 2 - WebSocket:**
 ```bash
-railway logs --service websocket
+cd lightning-reaction/websocket
+npm install
+npm run dev
 ```
-Look for:
-- `New connection: <socketId>`
-- `Room created: <roomId>`
-- `Game finished: <winner>`
-- Errors: Anti-cheat triggers, disconnects
 
-### Frontend Logs (Expo)
+**Terminal 3 - Frontend:**
 ```bash
+cd lightning-reaction/frontend
+npm install
 npx expo start
-# Press 'l' to show logs
 ```
-Look for:
-- API request failures
-- WebSocket connection errors
-- Payment flow issues
 
-## Security Checklist
+### 5. Test the Integration
 
-- [ ] Backend validates JWT on protected routes
-- [ ] WebSocket verifies payment before accepting join
-- [ ] Frontend never exposes LNbits keys (only backend has them)
-- [ ] CORS restricted to known origins in production
-- [ ] Rate limiting active (120 req/min on backend)
-- [ ] Database volume encrypted (Railway default)
-- [ ] Payment webhooks use HTTPS (required for LNbits)
-- [ ] Anti-cheat thresholds tuned (50ms min, 1000ms max)
+1. **Verify Backend:**
+   ```bash
+   curl http://localhost:4000/healthz
+   # Should return: {"ok":true}
+   ```
+
+2. **Verify WebSocket:**
+   - Check Terminal 2 logs: "Server listening on port 3001"
+
+3. **Test Frontend:**
+   - Scan QR code with Expo Go app
+   - Enter any test pubkey (e.g., `npub1test...`)
+   - Click "Play Now"
+   - Verify payment modal appears
+
+### 6. Test Payment Flow (End-to-End)
+
+**With Real LNbits:**
+1. Configure LNbits keys in backend `.env`
+2. Click "Play Now" in app
+3. Pay the Lightning invoice with a wallet
+4. Backend webhook confirms payment
+5. WebSocket adds you to game room
+6. Game starts when 2+ players join
+
+**Mock Testing (No LNbits):**
+- Temporarily modify backend to auto-confirm payments for testing
+- Or use LNbits testnet: https://testnet.lnbits.com
+
+## WebSocket Events (Reference)
+
+### Client → Server
+- `joinRoom` - `{ pubkey, paymentHash }`
+- `tap` - `{ timestamp }`
+- `leaveRoom` - (no payload)
+
+### Server → Client
+- `roomUpdated` - `{ roomId, players, status }`
+- `gameStart` - `{ countdown }`
+- `showWait` - `{ message }`
+- `showGreen` - `{ timestamp }`
+- `gameEnd` - `{ winner, reactionTime, prizePool, results }`
+- `error` - `{ message }`
 
 ## Troubleshooting
 
-### "Cannot connect to backend"
-- Check `API_URL` in frontend matches Railway URL
-- Verify backend health: `curl https://backend.railway.app/healthz`
-- Check Railway logs for crashes
+### Backend won't start
+- Check `.env` file exists
+- Verify `JWT_SECRET` is set
+- Check port 4000 not already in use: `lsof -i :4000`
 
-### "WebSocket connection failed"
-- Check `WS_URL` in frontend (use `wss://` not `ws://`)
-- Verify WebSocket health: `curl https://websocket.railway.app/health`
-- Check CORS_ORIGIN allows frontend domain
+### WebSocket connection fails
+- Verify WebSocket is running: `lsof -i :3001`
+- Check CORS settings in `websocket/src/index.ts`
+- Verify frontend has correct `WS_URL`
 
-### "Payment confirmed but can't join room"
-- Backend webhook may have failed
-- Check backend logs for `POST /api/webhook`
-- Manually verify: `curl https://backend.railway.app/api/rooms/:id`
+### Frontend can't reach backend
+- Android emulator: Use `10.0.2.2` not `localhost`
+- Physical device: Use your computer's local IP (e.g., `192.168.1.X`)
+- Check firewall isn't blocking ports 4000/3001
+- Verify both services are running: `lsof -i :4000,3001`
 
-### "Game stuck in WAITING state"
-- WebSocket requires 2+ players to start
-- Check if other player disconnected
-- Implement timeout: auto-cancel after 5 minutes
+### Payment webhook not working
+- Check `WEBHOOK_SECRET` matches between backend and LNbits
+- Verify webhook URL in LNbits settings: `http://your-domain/api/webhook/payment`
+- For local dev, use ngrok to expose backend: `ngrok http 4000`
+
+## Production Deployment
+
+### Backend
+- Deploy to VPS, Railway, or Render
+- Use HTTPS (required for Lightning)
+- Set production `CORS_ORIGIN`
+- Use strong `JWT_SECRET` and `WEBHOOK_SECRET`
+
+### WebSocket
+- Deploy alongside backend (same server)
+- Configure nginx for WebSocket proxying
+- Use WSS (secure WebSocket) in production
+
+### Frontend
+- Build APK: `npx expo build:android`
+- Sign with keystore
+- Update `API_URL` and `WS_URL` to production URLs
+- Submit to Zapstore
+
+## Next Steps
+
+1. ✅ All services integrated
+2. ⏳ Test with real Lightning payments
+3. ⏳ Add error handling polish
+4. ⏳ Build production APK
+5. ⏳ Deploy backend + WebSocket
+6. ⏳ Submit to Zapstore
 
 ---
 
-**Next Steps**:
-1. Deploy backend to Railway
-2. Deploy WebSocket to Railway
-3. Update frontend with production URLs
-4. Test end-to-end flow
-5. Build Android APK
-6. Submit to Zapstore
+**Status:** Integration complete, ready for testing
+**Last Updated:** 2026-02-14
