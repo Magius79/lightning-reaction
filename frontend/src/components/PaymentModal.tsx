@@ -123,7 +123,17 @@ const PaymentModal = ({ visible, onClose, onSuccess, pubkey }: PaymentModalProps
         throw new Error(`join failed (${resp.status}): ${txt}`);
       }
 
-      const data = await resp.json(); // { invoice, roomId, paymentHash }
+      const data = await resp.json(); // { invoice, roomId, paymentHash, credit? }
+
+      // Player has a credit from a timed-out room — skip payment
+      if (data.credit) {
+        setRoomId(data.roomId);
+        setPaymentHash(data.paymentHash);
+        setStatus('success');
+        setTimeout(() => onSuccess({ roomId: data.roomId, paymentHash: data.paymentHash }), 800);
+        return;
+      }
+
       setInvoice(data.invoice);
       setRoomId(data.roomId);
       setPaymentHash(data.paymentHash);

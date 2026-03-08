@@ -9,7 +9,7 @@ import {
   Dimensions,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { COLORS } from '../constants/theme';
+import { COLORS, API_URL } from '../constants/theme';
 import { wsService } from '../services/websocket';
 import { X, Users } from 'lucide-react-native';
 import PaymentModal from '../components/PaymentModal';
@@ -34,14 +34,18 @@ const GameScreen = ({ navigation }: any) => {
   const [payoutVisible, setPayoutVisible] = useState(false);
   const [payoutRoomId, setPayoutRoomId] = useState<string | null>(null);
   const [payoutAmountSats, setPayoutAmountSats] = useState<number | null>(null);
+  const [payoutResult, setPayoutResult] = useState<'none' | 'success' | 'failed'>('none');
+  const [payoutError, setPayoutError] = useState<string | null>(null);
 
   // 0: dark, 1: red (wait), 2: green (tap)
   const bgAnim = useRef(new Animated.Value(0)).current;
+  const currentRoomId = useRef<string | null>(null);
 
   const resetForNewRound = () => {
     setPlayers([]);
     setCountdown(0);
     setWinnerPubkey(null);
+    currentRoomId.current = null;
     Animated.timing(bgAnim, {
       toValue: 0,
       duration: 150,
@@ -110,16 +114,18 @@ const GameScreen = ({ navigation }: any) => {
       // { roomId, amountSats }
       setPayoutRoomId(data?.roomId ?? null);
       setPayoutAmountSats(typeof data?.amountSats === 'number' ? data.amountSats : null);
+      setPayoutResult('none');
+      setPayoutError(null);
       setPayoutVisible(true);
     };
 
-    const onPayoutSent = (data: any) => {
-      setPayoutVisible(false);
-      Alert.alert('Paid!', data?.duplicate ? 'Payout already sent.' : 'Payout sent.');
+    const onPayoutSent = (_data: any) => {
+      setPayoutResult('success');
     };
 
     const onPayoutFailed = (data: any) => {
-      Alert.alert('Payout failed', data?.error || 'Unknown error');
+      setPayoutResult('failed');
+      setPayoutError(data?.error || 'Unknown error');
     };
 
     const onRoomTimeout = (data: any) => {
@@ -148,6 +154,27 @@ const GameScreen = ({ navigation }: any) => {
     wsService.on('roomTimeout', onRoomTimeout);
     wsService.on('error', onWsError);
 
+    // On socket reconnect, check if room still exists (may have timed out while phone slept)
+    const onReconnect = async () => {
+      const rid = currentRoomId.current;
+      if (!rid) return;
+
+      try {
+        const resp = await fetch(`${API_URL}/api/rooms/${rid}`);
+        if (!resp.ok) {
+          // Room gone — server timed it out while we were asleep
+          Alert.alert(
+            'Room Timed Out',
+            'No opponents joined. You have a free credit for your next game.',
+            [{ text: 'OK', onPress: () => navigation.goBack() }]
+          );
+        }
+      } catch {
+        // Network error — stay in room, will retry on next reconnect
+      }
+    };
+    wsService.on('connect', onReconnect);
+
     return () => {
       // Avoid duplicate listeners if screen remounts
       wsService.off('roomUpdated');
@@ -161,6 +188,7 @@ const GameScreen = ({ navigation }: any) => {
       wsService.off('payoutFailed');
       wsService.off('roomTimeout');
       wsService.off('error');
+      wsService.off('connect');
 
       wsService.leaveRoom();
       wsService.disconnect();
@@ -251,6 +279,7 @@ const GameScreen = ({ navigation }: any) => {
           console.log('paid:', roomId, paymentHash);
           setShowPayment(false);
           setStatus('waiting');
+          currentRoomId.current = roomId;
 
           // joinRoom expects { pubkey, paymentHash }
           wsService.joinRoom(pubkey || 'anon', paymentHash);
@@ -262,6 +291,8 @@ const GameScreen = ({ navigation }: any) => {
         roomId={payoutRoomId}
         amountSats={payoutAmountSats}
         onClose={() => setPayoutVisible(false)}
+        payoutResult={payoutResult}
+        payoutError={payoutError}
         onSubmit={(bolt11: string) => {
           if (!payoutRoomId) return;
           wsService.submitPayoutInvoice(payoutRoomId, bolt11, pubkey || 'anon');
