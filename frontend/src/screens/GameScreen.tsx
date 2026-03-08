@@ -21,7 +21,7 @@ import PayoutModal from '../components/PayoutModal';
 
 const { width } = Dimensions.get('window');
 
-type GameStatus = 'waiting' | 'countdown' | 'wait' | 'ready' | 'result' | 'paying';
+type GameStatus = 'waiting' | 'countdown' | 'wait' | 'ready' | 'result' | 'paying' | 'disqualified';
 
 // Preload sounds
 const sounds: Record<string, Audio.Sound | null> = {
@@ -313,6 +313,17 @@ const GameScreen = ({ navigation }: any) => {
       );
     };
 
+    const onDisqualified = (_data: any) => {
+      setStatus('disqualified');
+      playSound('lose');
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Animated.timing(bgAnim, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: false,
+      }).start();
+    };
+
     // Make server rejections visible (RoomManager uses socket.emit('error', ...))
     const onWsError = (data: any) => {
       console.log('WS error', data);
@@ -329,6 +340,7 @@ const GameScreen = ({ navigation }: any) => {
     wsService.on('payoutSent', onPayoutSent);
     wsService.on('payoutFailed', onPayoutFailed);
     wsService.on('roomTimeout', onRoomTimeout);
+    wsService.on('disqualified', onDisqualified);
     wsService.on('error', onWsError);
 
     // On socket reconnect, check if room has timed out (phone may have been asleep)
@@ -361,6 +373,7 @@ const GameScreen = ({ navigation }: any) => {
       wsService.off('payoutSent');
       wsService.off('payoutFailed');
       wsService.off('roomTimeout');
+      wsService.off('disqualified');
       wsService.off('error');
       wsService.off('connect');
 
@@ -396,11 +409,6 @@ const GameScreen = ({ navigation }: any) => {
       playSound('tap');
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       wsService.sendTap(ts);
-
-      if (status === 'wait') {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-        Alert.alert('Too Early!', 'You tapped before the green signal.');
-      }
     }
   };
 
@@ -455,6 +463,17 @@ const GameScreen = ({ navigation }: any) => {
           {status === 'countdown' && <Text style={styles.countdownText}>{countdown}</Text>}
           {status === 'wait' && <Text style={styles.hugeText}>WAIT...</Text>}
           {status === 'ready' && <Text style={styles.hugeText}>TAP!</Text>}
+
+          {status === 'disqualified' && (
+            <View style={styles.resultContainer}>
+              <Text style={[styles.resultTitle, { color: COLORS.danger }]}>
+                DISQUALIFIED
+              </Text>
+              <Text style={styles.resultSubtitle}>
+                You tapped too early! Waiting for the round to finish...
+              </Text>
+            </View>
+          )}
 
           {status === 'result' && (
             <Animated.View

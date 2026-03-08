@@ -66,7 +66,7 @@ export class GameEngine {
     // Disqualify players who tap during the WAIT (red) phase
     if (room.status === 'wait') {
       room.disqualifyPlayer(socketId);
-      this.io.to(socketId).emit('error', { message: 'Too early! Wait for green.' });
+      this.io.to(socketId).emit('disqualified', { message: 'You tapped too early! You are disqualified from this round.' });
       return;
     }
 
