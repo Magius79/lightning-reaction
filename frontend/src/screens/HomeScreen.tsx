@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, ScrollView, RefreshControl } from 'react-native';
+import { StyleSheet, Text, View, TouchableOpacity, ScrollView, RefreshControl, Image } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS, API_URL } from '../constants/theme';
 import { Zap, Trophy, BarChart2, Settings, User } from 'lucide-react-native';
@@ -36,7 +36,7 @@ function npubToHex(npub: string): string | null {
 }
 
 // Fetch Nostr profile (kind 0) from relay
-function fetchNostrProfile(hexPubkey: string, timeoutMs = 5000): Promise<{ name?: string; display_name?: string } | null> {
+function fetchNostrProfile(hexPubkey: string, timeoutMs = 5000): Promise<{ name?: string; display_name?: string; picture?: string } | null> {
   return new Promise((resolve) => {
     try {
       const ws = new WebSocket('wss://relay.damus.io');
@@ -80,6 +80,7 @@ function fetchNostrProfile(hexPubkey: string, timeoutMs = 5000): Promise<{ name?
 
 const HomeScreen = ({ navigation }: any) => {
   const [displayName, setDisplayName] = useState('');
+  const [profilePic, setProfilePic] = useState<string | null>(null);
   const [stats, setStats] = useState({
     played: 0,
     won: 0,
@@ -96,13 +97,16 @@ const HomeScreen = ({ navigation }: any) => {
       // Show shortened npub immediately as fallback
       setDisplayName(`${pubkey.slice(0, 12)}…${pubkey.slice(-4)}`);
 
-      // Try to fetch Nostr display name
+      // Try to fetch Nostr display name and picture
       const hex = npubToHex(pubkey);
       if (hex) {
         const profile = await fetchNostrProfile(hex);
         const name = profile?.display_name || profile?.name;
         if (name) {
           setDisplayName(name);
+        }
+        if (profile?.picture) {
+          setProfilePic(profile.picture);
         }
       }
     } catch {
@@ -165,7 +169,11 @@ const HomeScreen = ({ navigation }: any) => {
       <View style={styles.header}>
         <View style={styles.profileInfo}>
           <View style={styles.avatarContainer}>
-            <User color={COLORS.textSecondary} size={30} />
+            {profilePic ? (
+              <Image source={{ uri: profilePic }} style={styles.avatarImage} />
+            ) : (
+              <User color={COLORS.textSecondary} size={30} />
+            )}
           </View>
           <View>
             <Text style={styles.welcomeText}>Welcome back,</Text>
@@ -250,6 +258,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
   },
   welcomeText: {
     color: COLORS.textSecondary,
