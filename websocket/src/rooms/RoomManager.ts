@@ -247,7 +247,13 @@ export class RoomManager {
 
     const player = room.players.get(socket.id);
 
-    // Only credit if the player explicitly left (not a disconnect/reconnect)
+    // Non-explicit disconnect while waiting: keep room alive for timeout
+    if (!explicit && room.status === 'waiting') {
+      console.log(`[RoomManager] Socket ${socket.id} disconnected (reconnect?) — keeping room ${roomId} alive for timeout`);
+      return;
+    }
+
+    // Explicit leave while waiting: credit the player and clean up
     if (explicit && player && room.status === 'waiting') {
       try {
         await axios.post(`${this.BACKEND_API}/api/rooms/credit`, { pubkey: player.pubkey });
