@@ -34,8 +34,6 @@ const GameScreen = ({ navigation }: any) => {
   const [payoutVisible, setPayoutVisible] = useState(false);
   const [payoutRoomId, setPayoutRoomId] = useState<string | null>(null);
   const [payoutAmountSats, setPayoutAmountSats] = useState<number | null>(null);
-  const [payoutResult, setPayoutResult] = useState<'none' | 'success' | 'failed'>('none');
-  const [payoutError, setPayoutError] = useState<string | null>(null);
 
   // 0: dark, 1: red (wait), 2: green (tap)
   const bgAnim = useRef(new Animated.Value(0)).current;
@@ -112,18 +110,24 @@ const GameScreen = ({ navigation }: any) => {
       // { roomId, amountSats }
       setPayoutRoomId(data?.roomId ?? null);
       setPayoutAmountSats(typeof data?.amountSats === 'number' ? data.amountSats : null);
-      setPayoutResult('none');
-      setPayoutError(null);
       setPayoutVisible(true);
     };
 
-    const onPayoutSent = (_data: any) => {
-      setPayoutResult('success');
+    const onPayoutSent = (data: any) => {
+      setPayoutVisible(false);
+      Alert.alert('Paid!', data?.duplicate ? 'Payout already sent.' : 'Payout sent.');
     };
 
     const onPayoutFailed = (data: any) => {
-      setPayoutResult('failed');
-      setPayoutError(data?.error || 'Unknown error');
+      Alert.alert('Payout failed', data?.error || 'Unknown error');
+    };
+
+    const onRoomTimeout = (data: any) => {
+      Alert.alert(
+        'Room Timed Out',
+        data?.message || 'No opponents joined. You have a free credit for your next game.',
+        [{ text: 'OK', onPress: () => navigation.goBack() }]
+      );
     };
 
     // Make server rejections visible (RoomManager uses socket.emit('error', ...))
@@ -141,6 +145,7 @@ const GameScreen = ({ navigation }: any) => {
     wsService.on('payoutRequested', onPayoutRequested);
     wsService.on('payoutSent', onPayoutSent);
     wsService.on('payoutFailed', onPayoutFailed);
+    wsService.on('roomTimeout', onRoomTimeout);
     wsService.on('error', onWsError);
 
     return () => {
@@ -154,6 +159,7 @@ const GameScreen = ({ navigation }: any) => {
       wsService.off('payoutRequested');
       wsService.off('payoutSent');
       wsService.off('payoutFailed');
+      wsService.off('roomTimeout');
       wsService.off('error');
 
       wsService.leaveRoom();
@@ -256,8 +262,6 @@ const GameScreen = ({ navigation }: any) => {
         roomId={payoutRoomId}
         amountSats={payoutAmountSats}
         onClose={() => setPayoutVisible(false)}
-        payoutResult={payoutResult}
-        payoutError={payoutError}
         onSubmit={(bolt11: string) => {
           if (!payoutRoomId) return;
           wsService.submitPayoutInvoice(payoutRoomId, bolt11, pubkey || 'anon');

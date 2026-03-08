@@ -11,9 +11,11 @@ export class RoomManager {
   private gameEngine: GameEngine;
   private readonly MAX_PLAYERS_PER_ROOM = 10;
   private readonly BACKEND_API = process.env.BACKEND_API_URL || 'http://localhost:4000';
+  private readonly ROOM_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
   // roomId -> winnerPubkey -> resolved
   private payoutInFlight: Set<string> = new Set();
+  private roomTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
   constructor(io: Server) {
     this.io = io;
@@ -51,6 +53,7 @@ export class RoomManager {
       if (!room) {
         room = new Room(roomId);
         this.rooms.set(roomId, room);
+        this.startRoomTimeout(roomId);
       }
 
       room.addPlayer(socket, pubkey);
@@ -65,6 +68,7 @@ export class RoomManager {
       });
 
       if (room.getPlayerCount() >= 2 && room.status === 'waiting') {
+        this.clearRoomTimeout(roomId);
         this.gameEngine.startGame(roomId);
       }
     } catch (error) {
@@ -160,6 +164,52 @@ export class RoomManager {
     }
   }
 
+  private startRoomTimeout(roomId: string) {
+    this.clearRoomTimeout(roomId);
+    const timer = setTimeout(() => this.handleRoomTimeout(roomId), this.ROOM_TIMEOUT_MS);
+    this.roomTimeouts.set(roomId, timer);
+    console.log(`[RoomManager] Started ${this.ROOM_TIMEOUT_MS / 1000}s timeout for room ${roomId}`);
+  }
+
+  private clearRoomTimeout(roomId: string) {
+    const timer = this.roomTimeouts.get(roomId);
+    if (timer) {
+      clearTimeout(timer);
+      this.roomTimeouts.delete(roomId);
+    }
+  }
+
+  private async handleRoomTimeout(roomId: string) {
+    this.roomTimeouts.delete(roomId);
+    const room = this.rooms.get(roomId);
+    if (!room || room.status !== 'waiting') return;
+
+    console.log(`[RoomManager] Room ${roomId} timed out — crediting ${room.getPlayerCount()} player(s)`);
+
+    // Credit each player via the backend
+    for (const [socketId, player] of room.players) {
+      try {
+        await axios.post(`${this.BACKEND_API}/api/rooms/credit`, { pubkey: player.pubkey });
+        console.log(`[RoomManager] Credited player ${player.pubkey}`);
+      } catch (e: any) {
+        console.error(`[RoomManager] Failed to credit player ${player.pubkey}:`, e?.message);
+      }
+
+      // Notify the player
+      const sock = this.io.sockets.sockets.get(socketId);
+      if (sock) {
+        sock.emit('roomTimeout', {
+          roomId,
+          message: 'Room timed out — no opponents joined. You have a free credit for your next game.',
+        });
+        sock.leave(roomId);
+      }
+    }
+
+    // Clean up the room
+    this.rooms.delete(roomId);
+  }
+
   async handleLeaveRoom(socket: Socket) {
     const roomId = Array.from(socket.rooms).find((r) => r !== socket.id);
     if (!roomId) return;
@@ -187,6 +237,7 @@ export class RoomManager {
     });
 
     if (room.getPlayerCount() === 0) {
+      this.clearRoomTimeout(roomId);
       this.rooms.delete(roomId);
     } else if (room.status !== 'waiting' && room.getPlayerCount() < 2) {
       this.gameEngine.endGame(roomId, null);

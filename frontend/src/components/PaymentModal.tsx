@@ -227,7 +227,7 @@ const PaymentModal = ({ visible, onClose, onSuccess, pubkey }: PaymentModalProps
                   </TouchableOpacity>
 
                   <TouchableOpacity style={[styles.walletButton, styles.checkButton]} onPress={confirmPaid}>
-                    <Text style={[styles.walletButtonText, { marginLeft: 0, color: '#fff' }]}>I paid — check now</Text>
+                    <Text style={[styles.walletButtonText, { marginLeft: 0 }]}>I paid — check now</Text>
                   </TouchableOpacity>
                 </View>
               </>

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { parseBody } from '../utils/validation';
-import { getOrCreatePlayer } from '../services/player';
+import { getOrCreatePlayer, getPlayerCredits, addPlayerCredit, usePlayerCredit } from '../services/player';
 import { checkInvoice, createInvoice } from '../services/lightning';
 import { env } from '../config/env';
 import {
@@ -24,6 +24,21 @@ roomsRouter.post('/join', async (req, res, next) => {
 
     const room = getOrCreateOpenRoom();
     upsertRoomPlayer(room.id, body.pubkey);
+
+    // Check if player has a credit from a timed-out room
+    const credits = getPlayerCredits(body.pubkey);
+    if (credits > 0) {
+      usePlayerCredit(body.pubkey);
+
+      // Generate a fake payment hash for the credit entry so the flow works
+      const creditHash = `credit_${Date.now()}_${body.pubkey.slice(0, 8)}`;
+      setRoomPlayerPaymentHash(room.id, body.pubkey, creditHash);
+      markRoomPlayerPaidByHash(creditHash);
+
+      console.log('[rooms/join] using credit', { roomId: room.id, pubkey: body.pubkey, creditHash });
+
+      return res.json({ invoice: null, roomId: room.id, paymentHash: creditHash, credit: true });
+    }
 
     const inv = await createInvoice({
       amountSats: env.ENTRY_FEE,
@@ -60,6 +75,18 @@ roomsRouter.post('/confirm', async (req, res, next) => {
     }
 
     res.status(202).json({ ok: true, paid: false });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Credit a player (called by WebSocket server when room times out)
+roomsRouter.post('/credit', async (req, res, next) => {
+  try {
+    const body = parseBody(z.object({ pubkey: z.string().min(16) }), req.body);
+    addPlayerCredit(body.pubkey);
+    console.log('[rooms/credit] credited player', { pubkey: body.pubkey });
+    res.json({ ok: true });
   } catch (e) {
     next(e);
   }

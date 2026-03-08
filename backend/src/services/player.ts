@@ -43,3 +43,41 @@ export function listLeaderboard(limit: number) {
     )
     .all(limit) as Array<{ pubkey: string; gamesWon: number; avgReactionTime: number | null; totalWinnings: number }>;
 }
+
+// ── Credit system (for room timeout refunds) ──
+
+function ensureCreditsColumn() {
+  const db = getDb();
+  try {
+    db.exec('ALTER TABLE players ADD COLUMN credits INTEGER NOT NULL DEFAULT 0');
+  } catch {
+    // Column already exists — safe to ignore
+  }
+}
+
+let creditsColumnReady = false;
+function initCredits() {
+  if (!creditsColumnReady) {
+    ensureCreditsColumn();
+    creditsColumnReady = true;
+  }
+}
+
+export function getPlayerCredits(pubkey: string): number {
+  initCredits();
+  const db = getDb();
+  const row = db.prepare('SELECT credits FROM players WHERE pubkey = ?').get(pubkey) as { credits: number } | undefined;
+  return row?.credits ?? 0;
+}
+
+export function addPlayerCredit(pubkey: string): void {
+  initCredits();
+  const db = getDb();
+  db.prepare('UPDATE players SET credits = credits + 1 WHERE pubkey = ?').run(pubkey);
+}
+
+export function usePlayerCredit(pubkey: string): void {
+  initCredits();
+  const db = getDb();
+  db.prepare('UPDATE players SET credits = credits - 1 WHERE pubkey = ? AND credits > 0').run(pubkey);
+}
