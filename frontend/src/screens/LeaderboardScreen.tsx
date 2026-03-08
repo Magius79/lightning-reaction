@@ -43,19 +43,16 @@ function npubToHex(npub: string): string | null {
   }
 }
 
-// Fetch multiple Nostr profiles in one connection
-function fetchNostrProfiles(
-  hexPubkeys: string[],
-  timeoutMs = 6000
-): Promise<Map<string, { name?: string; display_name?: string }>> {
+// Fetch a single Nostr profile from relay
+function fetchNostrProfile(
+  hexPubkey: string,
+  timeoutMs = 4000
+): Promise<{ name?: string; display_name?: string } | null> {
   const relays = ['wss://relay.damus.io', 'wss://relay.nostr.band', 'wss://nos.lol'];
 
   return new Promise((resolve) => {
-    const profiles = new Map<string, { name?: string; display_name?: string }>();
-    if (hexPubkeys.length === 0) { resolve(profiles); return; }
-
     let resolved = false;
-    let attempts = 0;
+    let attempt = 0;
 
     const tryRelay = (relayUrl: string) => {
       try {
@@ -63,61 +60,44 @@ function fetchNostrProfiles(
         const timer = setTimeout(() => {
           ws.close();
           if (!resolved) {
-            attempts++;
-            if (attempts < relays.length) {
-              tryRelay(relays[attempts]);
-            } else {
-              resolved = true;
-              resolve(profiles);
-            }
+            attempt++;
+            if (attempt < relays.length) tryRelay(relays[attempt]);
+            else { resolved = true; resolve(null); }
           }
         }, timeoutMs);
 
         ws.onopen = () => {
-          const subId = 'lb_' + Date.now();
-          ws.send(JSON.stringify(['REQ', subId, { kinds: [0], authors: hexPubkeys, limit: hexPubkeys.length }]));
+          ws.send(JSON.stringify(['REQ', 'p_' + Date.now(), { kinds: [0], authors: [hexPubkey], limit: 1 }]));
         };
 
         ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data);
-            if (msg[0] === 'EVENT' && msg[2]?.content && msg[2]?.pubkey) {
-              const profile = JSON.parse(msg[2].content);
-              profiles.set(msg[2].pubkey, profile);
+            if (msg[0] === 'EVENT' && msg[2]?.content) {
+              clearTimeout(timer);
+              ws.close();
+              if (!resolved) { resolved = true; resolve(JSON.parse(msg[2].content)); }
             } else if (msg[0] === 'EOSE') {
               clearTimeout(timer);
               ws.close();
-              if (!resolved) {
-                resolved = true;
-                resolve(profiles);
-              }
+              if (!resolved) { resolved = true; resolve(null); }
             }
-          } catch {
-            // ignore parse errors
-          }
+          } catch {}
         };
 
         ws.onerror = () => {
           clearTimeout(timer);
           if (!resolved) {
-            attempts++;
-            if (attempts < relays.length) {
-              tryRelay(relays[attempts]);
-            } else {
-              resolved = true;
-              resolve(profiles);
-            }
+            attempt++;
+            if (attempt < relays.length) tryRelay(relays[attempt]);
+            else { resolved = true; resolve(null); }
           }
         };
       } catch {
         if (!resolved) {
-          attempts++;
-          if (attempts < relays.length) {
-            tryRelay(relays[attempts]);
-          } else {
-            resolved = true;
-            resolve(profiles);
-          }
+          attempt++;
+          if (attempt < relays.length) tryRelay(relays[attempt]);
+          else { resolved = true; resolve(null); }
         }
       }
     };
@@ -150,27 +130,32 @@ const LeaderboardScreen = ({ navigation }: any) => {
 
       setEntries(mapped);
 
-      // Resolve Nostr names in background
-      const hexMap = new Map<string, string>(); // hex -> npub
-      for (const entry of mapped) {
-        const hex = npubToHex(entry.pubkey);
-        if (hex) hexMap.set(hex, entry.pubkey);
-      }
+      // Resolve Nostr names in background (individual queries)
+      const resolveNames = async () => {
+        const updates = new Map<string, string>();
 
-      if (hexMap.size > 0) {
-        const profiles = await fetchNostrProfiles(Array.from(hexMap.keys()));
-
-        setEntries((prev) =>
-          prev.map((entry) => {
+        await Promise.all(
+          mapped.map(async (entry) => {
             const hex = npubToHex(entry.pubkey);
-            if (!hex) return entry;
-            const profile = profiles.get(hex);
+            if (!hex) return;
+            const profile = await fetchNostrProfile(hex);
             const name = profile?.display_name || profile?.name;
-            if (name) return { ...entry, displayName: name };
-            return entry;
+            if (name) updates.set(entry.pubkey, name);
           })
         );
-      }
+
+        if (updates.size > 0) {
+          setEntries((prev) =>
+            prev.map((entry) => {
+              const name = updates.get(entry.pubkey);
+              if (name) return { ...entry, displayName: name };
+              return entry;
+            })
+          );
+        }
+      };
+
+      resolveNames();
     } catch {
       // Keep existing data
     }
