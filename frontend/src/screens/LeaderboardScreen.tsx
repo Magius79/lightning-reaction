@@ -113,10 +113,12 @@ const LeaderboardScreen = ({ navigation }: any) => {
 
   const fetchLeaderboard = useCallback(async () => {
     try {
-      const myPubkey = await AsyncStorage.getItem('user_pubkey');
+      const myPubkey = (await AsyncStorage.getItem('user_pubkey'))?.trim() || '';
       const resp = await fetch(`${API_URL}/api/leaderboard`);
       if (!resp.ok) return;
       const data = await resp.json();
+
+      console.log('[Leaderboard] myPubkey:', myPubkey?.slice(0, 20));
 
       // Initial mapping with shortened npubs
       const mapped: LeaderboardEntry[] = (data || []).map((entry: any) => ({
@@ -125,7 +127,7 @@ const LeaderboardScreen = ({ navigation }: any) => {
         gamesWon: entry.gamesWon ?? 0,
         avgReactionTime: entry.avgReactionTime ? Math.round(entry.avgReactionTime) : null,
         totalWinnings: entry.totalWinnings ?? 0,
-        isMe: entry.pubkey === myPubkey,
+        isMe: myPubkey.length > 0 && entry.pubkey.trim() === myPubkey,
       }));
 
       setEntries(mapped);

@@ -45,14 +45,9 @@ export class Room {
       reactionTime: null,
       disqualified: false,
     });
-    this.prizePool += Math.floor(this.entryFee * (1 - this.houseEdge));
   }
 
   removePlayer(socketId: string) {
-    const player = this.players.get(socketId);
-    if (player && !player.paid) {
-      this.prizePool -= Math.floor(this.entryFee * (1 - this.houseEdge));
-    }
     this.players.delete(socketId);
   }
 
@@ -60,10 +55,14 @@ export class Room {
     return this.players.size;
   }
 
-  setPlayerPaid(socketId: string) {
+  setPlayerPaid(socketId: string, isCredit = false) {
     const player = this.players.get(socketId);
     if (player) {
       player.paid = true;
+      // Only add to prize pool for real payments, not credits
+      if (!isCredit) {
+        this.prizePool += Math.floor(this.entryFee * (1 - this.houseEdge));
+      }
     }
   }
 

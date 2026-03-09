@@ -30,6 +30,10 @@ class WebSocketService {
     this.socket?.emit('leaveRoom');
   }
 
+  rejoinRoom(pubkey: string, roomId: string) {
+    this.socket?.emit('rejoinRoom', { pubkey, roomId });
+  }
+
   // Winner submits a BOLT11 invoice for payout.
   // Include pubkey so payout survives reconnects (socket.id may change).
   submitPayoutInvoice(roomId: string, bolt11: string, pubkey: string) {

@@ -156,6 +156,7 @@ const GameScreen = ({ navigation }: any) => {
   const currentRoomId = useRef<string | null>(null);
   const joinedAt = useRef<number>(0);
   const statusRef = useRef<GameStatus>('paying');
+  const pubkeyRef = useRef<string>('');
   const ROOM_TIMEOUT_MS = 5 * 60 * 1000;
 
   // Result screen animations
@@ -185,6 +186,10 @@ const GameScreen = ({ navigation }: any) => {
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
+
+  useEffect(() => {
+    pubkeyRef.current = pubkey;
+  }, [pubkey]);
 
   // Start/stop waiting room timer
   useEffect(() => {
@@ -343,12 +348,14 @@ const GameScreen = ({ navigation }: any) => {
     wsService.on('disqualified', onDisqualified);
     wsService.on('error', onWsError);
 
-    // On socket reconnect, check if room has timed out (phone may have been asleep)
+    // On socket reconnect, rejoin room if in active game, or check timeout
     const onReconnect = () => {
       const rid = currentRoomId.current;
       if (!rid || !joinedAt.current) return;
 
       const elapsed = Date.now() - joinedAt.current;
+
+      // If waiting and timed out, show alert
       if (elapsed >= ROOM_TIMEOUT_MS && statusRef.current === 'waiting') {
         currentRoomId.current = null;
         joinedAt.current = 0;
@@ -357,7 +364,13 @@ const GameScreen = ({ navigation }: any) => {
           'No opponents joined. You have a free credit for your next game.',
           [{ text: 'OK', onPress: () => navigation.goBack() }]
         );
+        return;
       }
+
+      // Otherwise rejoin the room so the server recognizes our new socket
+      const pk = pubkeyRef.current || 'anon';
+      console.log(`[GameScreen] Reconnected — rejoining room ${rid}`);
+      wsService.rejoinRoom(pk, rid);
     };
     wsService.on('connect', onReconnect);
 

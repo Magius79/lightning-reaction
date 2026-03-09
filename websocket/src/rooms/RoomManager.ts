@@ -62,7 +62,7 @@ export class RoomManager {
 
       room.addPlayer(socket, pubkey);
       socket.join(roomId);
-      room.setPlayerPaid(socket.id);
+      room.setPlayerPaid(socket.id, paymentHash.startsWith('credit_'));
       this.socketRooms.set(socket.id, roomId);
 
       this.io.to(roomId).emit('roomUpdated', {
@@ -79,6 +79,42 @@ export class RoomManager {
     } catch (error) {
       socket.emit('error', { message: 'Failed to join room' });
       console.error('Join room error:', error);
+    }
+  }
+
+  handleRejoinRoom(socket: Socket, data: { pubkey: string; roomId: string }) {
+    const { pubkey, roomId } = data || ({} as any);
+    if (!pubkey || !roomId) return;
+
+    const room = this.rooms.get(roomId);
+    if (!room) {
+      socket.emit('error', { message: 'Room not found' });
+      return;
+    }
+
+    // Find the player by pubkey in the room
+    let found = false;
+    for (const [oldSocketId, player] of room.players) {
+      if (player.pubkey === pubkey) {
+        // Re-map the socket
+        this.socketRooms.set(socket.id, roomId);
+        socket.join(roomId);
+
+        // Update the player's socket reference if the room supports it
+        if (oldSocketId !== socket.id) {
+          room.players.set(socket.id, player);
+          room.players.delete(oldSocketId);
+          this.socketRooms.delete(oldSocketId);
+        }
+
+        console.log(`[RoomManager] Player ${pubkey} rejoined room ${roomId} with new socket ${socket.id}`);
+        found = true;
+        break;
+      }
+    }
+
+    if (!found) {
+      socket.emit('error', { message: 'Player not found in room' });
     }
   }
 
