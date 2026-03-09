@@ -88,6 +88,8 @@ const HomeScreen = ({ navigation }: any) => {
   });
   const [refreshing, setRefreshing] = useState(false);
   const [topPlayers, setTopPlayers] = useState<any[]>([]);
+  const [leaderboardNames, setLeaderboardNames] = useState<Map<string, string>>(new Map());
+  const [myPubkey, setMyPubkey] = useState<string>('');
 
   const loadProfile = async () => {
     try {
@@ -96,6 +98,7 @@ const HomeScreen = ({ navigation }: any) => {
 
       // Show shortened npub immediately as fallback
       setDisplayName(`${pubkey.slice(0, 12)}…${pubkey.slice(-4)}`);
+      setMyPubkey(pubkey);
 
       // Try to fetch Nostr display name and picture
       const hex = npubToHex(pubkey);
@@ -138,6 +141,19 @@ const HomeScreen = ({ navigation }: any) => {
       if (resp.ok) {
         const data = await resp.json();
         setTopPlayers(data || []);
+
+        // Resolve Nostr names for top players
+        const names = new Map<string, string>();
+        await Promise.all(
+          (data || []).map(async (p: any) => {
+            const hex = npubToHex(p.pubkey);
+            if (!hex) return;
+            const profile = await fetchNostrProfile(hex);
+            const name = profile?.display_name || profile?.name;
+            if (name) names.set(p.pubkey, name);
+          })
+        );
+        if (names.size > 0) setLeaderboardNames(names);
       }
     } catch {
       // Keep empty
@@ -210,13 +226,17 @@ const HomeScreen = ({ navigation }: any) => {
           </TouchableOpacity>
         </View>
         
-        {topPlayers.length > 0 ? topPlayers.map((p: any, i: number) => (
-          <View key={p.pubkey} style={styles.leaderboardItem}>
-            <Text style={styles.rank}>#{i + 1}</Text>
-            <Text style={styles.name}>{`${p.pubkey.slice(0, 10)}…`}</Text>
-            <Text style={styles.score}>{p.avgReactionTime ? `${Math.round(p.avgReactionTime)}ms` : '—'}</Text>
-          </View>
-        )) : (
+        {topPlayers.length > 0 ? topPlayers.map((p: any, i: number) => {
+          const isMe = myPubkey && p.pubkey === myPubkey;
+          const name = isMe ? 'You' : (leaderboardNames.get(p.pubkey) || `${p.pubkey.slice(0, 10)}…`);
+          return (
+            <View key={p.pubkey} style={[styles.leaderboardItem, isMe && styles.leaderboardItemMe]}>
+              <Text style={styles.rank}>#{i + 1}</Text>
+              <Text style={[styles.name, isMe && styles.nameMe]}>{name}</Text>
+              <Text style={styles.score}>{p.avgReactionTime ? `${Math.round(p.avgReactionTime)}ms` : '—'}</Text>
+            </View>
+          );
+        }) : (
           <View style={styles.leaderboardItem}>
             <Text style={styles.name}>No games played yet</Text>
           </View>
@@ -351,6 +371,11 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     alignItems: 'center',
   },
+  leaderboardItemMe: {
+    borderColor: COLORS.primary,
+    borderWidth: 1,
+    backgroundColor: '#332a1e',
+  },
   rank: {
     color: COLORS.primary,
     fontWeight: 'bold',
@@ -359,6 +384,9 @@ const styles = StyleSheet.create({
   name: {
     color: COLORS.text,
     flex: 1,
+  },
+  nameMe: {
+    color: COLORS.primary,
   },
   score: {
     color: COLORS.success,
