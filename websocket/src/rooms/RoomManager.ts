@@ -173,7 +173,9 @@ export class RoomManager {
 
     const room = this.rooms.get(roomId);
     if (!room) {
-      socket.emit('error', { message: 'Room not found' });
+      // Room not found — likely a brief reconnect race. Don't surface as a user-facing error;
+      // the client will retry automatically via rejoinRoom + re-emitted payoutRequested.
+      console.warn(`[submitPayoutInvoice] Room ${roomId} not found for pubkey ${pubkey} — ignoring (reconnect race?)`);
       return;
     }
 
