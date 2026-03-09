@@ -310,10 +310,22 @@ export class RoomManager {
 
     const player = room.players.get(socket.id);
 
-    // Non-explicit disconnect while waiting: keep room alive for timeout.
-    // IMPORTANT: do NOT delete socketRooms here so the mapping survives reconnect.
+    // Non-explicit disconnect while waiting: keep room alive for the timeout,
+    // but REMOVE the player from the room so their entry doesn't ghost-count
+    // toward the player total and trigger a premature game start.
+    // If they reconnect they'll go through joinRoom again (credit or re-pay).
     if (!explicit && room.status === 'waiting') {
-      console.log(`[RoomManager] Socket ${socket.id} disconnected (reconnect?) — keeping room ${roomId} alive for timeout`);
+      console.log(`[RoomManager] Socket ${socket.id} disconnected in waiting room ${roomId} — removing player, keeping room alive`);
+      room.removePlayer(socket.id);
+      this.socketRooms.delete(socket.id);
+      socket.leave(roomId);
+      // Notify remaining players of updated count
+      this.io.to(roomId).emit('roomUpdated', {
+        roomId,
+        players: Array.from(room.players.values()),
+        status: room.status,
+        countdown: 0,
+      });
       return;
     }
 
