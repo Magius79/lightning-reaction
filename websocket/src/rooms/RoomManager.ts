@@ -94,7 +94,8 @@ export class RoomManager {
 
     const room = this.rooms.get(roomId);
     if (!room) {
-      socket.emit('error', { message: 'Room not found' });
+      // Room not found during rejoin — transient reconnect race, not a user-facing error
+      console.warn(`[rejoinRoom] Room ${roomId} not found for pubkey ${pubkey} — ignoring (reconnect race?)`);
       return;
     }
 

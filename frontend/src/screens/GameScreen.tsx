@@ -330,9 +330,13 @@ const GameScreen = ({ navigation }: any) => {
     };
 
     // Make server rejections visible (RoomManager uses socket.emit('error', ...))
+    // Transient reconnect errors (room/player not found) are silenced — they self-resolve.
+    const SILENT_ERRORS = ['Room not found', 'Player not found in room'];
     const onWsError = (data: any) => {
-      console.log('WS error', data);
-      Alert.alert('WS error', data?.message || JSON.stringify(data));
+      const msg = data?.message || JSON.stringify(data);
+      console.log('WS error', msg);
+      if (SILENT_ERRORS.some((e) => msg.includes(e))) return;
+      Alert.alert('Error', msg);
     };
 
     wsService.on('roomUpdated', onRoomUpdated);
