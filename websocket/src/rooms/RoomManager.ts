@@ -53,7 +53,13 @@ export class RoomManager {
       const roomId = process.env.FORCE_ROOM_ID || this.matchmaker.findAvailableRoom();
       console.log('[joinRoom] roomId=', roomId, 'FORCE_ROOM_ID=', process.env.FORCE_ROOM_ID);
 
-      let room = this.rooms.get(roomId);
+      let room: Room | undefined = this.rooms.get(roomId);
+      // Bug fix: don't reuse a finished/in-progress room (e.g. when FORCE_ROOM_ID is set).
+      // Reusing a finished room causes prize-pool carry-over (270 instead of 180 for 2 players).
+      if (room && room.status !== 'waiting') {
+        console.log(`[joinRoom] Room ${roomId} is '${room.status}' — resetting to a fresh room`);
+        room = undefined;
+      }
       if (!room) {
         room = new Room(roomId);
         this.rooms.set(roomId, room);
@@ -108,6 +114,23 @@ export class RoomManager {
         }
 
         console.log(`[RoomManager] Player ${pubkey} rejoined room ${roomId} with new socket ${socket.id}`);
+
+        // Re-sync client with current game state
+        socket.emit('roomUpdated', {
+          roomId,
+          players: Array.from(room.players.values()),
+          status: room.status,
+          countdown: 0,
+        });
+
+        // If game is finished and this player is the winner awaiting payout, re-request invoice
+        if (room.status === 'finished' && room.winnerPubkey === pubkey && room.payoutStatus === 'requested') {
+          const cap = Number(process.env.TEST_PAYOUT_SATS || 0);
+          const amountSats = cap > 0 ? Math.min(room.prizePool, cap) : room.prizePool;
+          socket.emit('payoutRequested', { roomId, amountSats });
+          console.log(`[RoomManager] Re-sent payoutRequested to rejoined winner ${pubkey}`);
+        }
+
         found = true;
         break;
       }
@@ -276,24 +299,30 @@ export class RoomManager {
     const roomId = this.socketRooms.get(socket.id);
     if (!roomId) return;
 
-    this.socketRooms.delete(socket.id);
-
     const room = this.rooms.get(roomId);
-    if (!room) return;
+    if (!room) {
+      this.socketRooms.delete(socket.id);
+      return;
+    }
 
     const player = room.players.get(socket.id);
 
-    // Non-explicit disconnect while waiting: keep room alive for timeout
+    // Non-explicit disconnect while waiting: keep room alive for timeout.
+    // IMPORTANT: do NOT delete socketRooms here so the mapping survives reconnect.
     if (!explicit && room.status === 'waiting') {
       console.log(`[RoomManager] Socket ${socket.id} disconnected (reconnect?) — keeping room ${roomId} alive for timeout`);
       return;
     }
 
-    // Non-explicit disconnect on finished game with pending payout: keep room alive
+    // Non-explicit disconnect on finished game with pending payout: keep room alive.
+    // IMPORTANT: do NOT delete socketRooms here so payout can be retried on the same socket.
     if (!explicit && room.status === 'finished' && room.payoutStatus !== 'paid') {
       console.log(`[RoomManager] Socket ${socket.id} disconnected (reconnect?) — keeping finished room ${roomId} alive for payout`);
       return;
     }
+
+    // Safe to remove the mapping now — we're proceeding with cleanup
+    this.socketRooms.delete(socket.id);
 
     // Explicit leave while waiting: credit the player and clean up
     if (explicit && player && room.status === 'waiting') {

@@ -4,6 +4,7 @@
   "description": "WebSocket server for Lightning Reaction Tournament",
   "main": "dist/index.js",
   "scripts": {
+    "prebuild": "rm -rf dist",
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
