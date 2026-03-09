@@ -59,10 +59,9 @@ export class Room {
     const player = this.players.get(socketId);
     if (player) {
       player.paid = true;
-      // Only add to prize pool for real payments, not credits
-      if (!isCredit) {
-        this.prizePool += Math.floor(this.entryFee * (1 - this.houseEdge));
-      }
+      // Credits represent a previously-paid entry (room timed out), so they
+      // contribute to the prize pool the same as a direct payment.
+      this.prizePool += Math.floor(this.entryFee * (1 - this.houseEdge));
     }
   }
 
