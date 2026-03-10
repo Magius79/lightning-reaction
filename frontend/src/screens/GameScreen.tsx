@@ -518,13 +518,13 @@ const GameScreen = ({ navigation }: any) => {
                 </Text>
               ) : null}
 
-              <Text style={styles.resultSubtitle}>
-                {winnerPubkey
-                  ? winnerPubkey === pubkey
-                    ? 'Collect your winnings below'
-                    : `Winner: ${winnerPubkey.slice(0, 8)}…`
-                  : 'No winner'}
-              </Text>
+              {winnerPubkey && winnerPubkey !== pubkey ? (
+                <Text style={styles.resultSubtitle}>
+                  {`Winner: ${winnerPubkey.slice(0, 8)}…`}
+                </Text>
+              ) : !winnerPubkey ? (
+                <Text style={styles.resultSubtitle}>No winner</Text>
+              ) : null}
 
               <TouchableOpacity style={styles.actionButton} onPress={handlePlayAgain}>
                 <Text style={styles.actionButtonText}>Play Again</Text>
