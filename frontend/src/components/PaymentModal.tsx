@@ -107,7 +107,7 @@ const PaymentModal = ({ visible, onClose, onSuccess, pubkey }: PaymentModalProps
       setError(null);
 
       const controller = new AbortController();
-      const t = setTimeout(() => controller.abort(), 15000);
+      const t = setTimeout(() => controller.abort(), 30000);
 
       const resp = await fetch(`${API_URL}/api/rooms/join`, {
         method: 'POST',
@@ -142,7 +142,8 @@ const PaymentModal = ({ visible, onClose, onSuccess, pubkey }: PaymentModalProps
       // Start auto-polling as soon as invoice is ready
       startPolling(data.paymentHash, data.roomId);
     } catch (e: any) {
-      setError(e?.message ?? String(e));
+      const isTimeout = e?.name === 'AbortError' || String(e).includes('Aborted');
+      setError(isTimeout ? 'Request timed out — LNbits may be slow. Please try again.' : (e?.message ?? String(e)));
       setStatus('error');
     }
   };
@@ -186,7 +187,8 @@ const PaymentModal = ({ visible, onClose, onSuccess, pubkey }: PaymentModalProps
         Alert.alert('Not yet', 'Payment not detected yet — we\'ll keep checking automatically.');
       }
     } catch (e: any) {
-      setError(e?.message ?? String(e));
+      const isTimeout = e?.name === 'AbortError' || String(e).includes('Aborted');
+      setError(isTimeout ? 'Request timed out — LNbits may be slow. Please try again.' : (e?.message ?? String(e)));
       setStatus('error');
     }
   };
