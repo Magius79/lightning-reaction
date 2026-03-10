@@ -310,12 +310,22 @@ export class RoomManager {
 
     const player = room.players.get(socket.id);
 
-    // Non-explicit disconnect while waiting: keep room alive for the timeout,
-    // but REMOVE the player from the room so their entry doesn't ghost-count
-    // toward the player total and trigger a premature game start.
+    // Non-explicit disconnect while waiting: credit the player immediately
+    // (they paid but the game never started), then remove from the room so
+    // their entry doesn't ghost-count toward the player total.
     // If they reconnect they'll go through joinRoom again (credit or re-pay).
     if (!explicit && room.status === 'waiting') {
-      console.log(`[RoomManager] Socket ${socket.id} disconnected in waiting room ${roomId} — removing player, keeping room alive`);
+      console.log(`[RoomManager] Socket ${socket.id} disconnected in waiting room ${roomId} — crediting and removing player`);
+
+      if (player?.paid) {
+        try {
+          await axios.post(`${this.BACKEND_API}/api/rooms/credit`, { pubkey: player.pubkey });
+          console.log(`[RoomManager] Credited disconnected player ${player.pubkey}`);
+        } catch (e: any) {
+          console.error(`[RoomManager] Failed to credit disconnected player ${player.pubkey}:`, e?.message);
+        }
+      }
+
       room.removePlayer(socket.id);
       this.socketRooms.delete(socket.id);
       socket.leave(roomId);
