@@ -224,7 +224,14 @@ const GameScreen = ({ navigation }: any) => {
 
     const onRoomUpdated = (data: any) => {
       if (Array.isArray(data?.players)) setPlayers(data.players);
-      if (data?.status) setStatus(data.status);
+
+      if (data?.status) {
+        // Map server-side 'finished' to the frontend 'result' status.
+        // Also never override a result/disqualified screen with a stale roomUpdated.
+        const incoming = data.status === 'finished' ? 'result' : data.status;
+        const protected_ = ['result', 'disqualified'];
+        setStatus((prev) => protected_.includes(prev) ? prev : incoming);
+      }
 
       // countdown ticks come via roomUpdated
       if (typeof data?.countdown === 'number') {
@@ -330,13 +337,9 @@ const GameScreen = ({ navigation }: any) => {
     };
 
     // Make server rejections visible (RoomManager uses socket.emit('error', ...))
-    // Transient reconnect errors (room/player not found) are silenced — they self-resolve.
-    const SILENT_ERRORS = ['Room not found', 'Player not found in room'];
     const onWsError = (data: any) => {
-      const msg = data?.message || JSON.stringify(data);
-      console.log('WS error', msg);
-      if (SILENT_ERRORS.some((e) => msg.includes(e))) return;
-      Alert.alert('Error', msg);
+      console.log('WS error', data);
+      Alert.alert('WS error', data?.message || JSON.stringify(data));
     };
 
     wsService.on('roomUpdated', onRoomUpdated);
