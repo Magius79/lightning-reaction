@@ -12,10 +12,12 @@ export class RoomManager {
   private readonly MAX_PLAYERS_PER_ROOM = 10;
   private readonly BACKEND_API = process.env.BACKEND_API_URL || 'http://localhost:4000';
   private readonly ROOM_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+  private readonly PAYOUT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes to claim winnings
 
   // roomId -> winnerPubkey -> resolved
   private payoutInFlight: Set<string> = new Set();
   private roomTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private payoutTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private socketRooms: Map<string, string> = new Map(); // socketId -> roomId
 
   constructor(io: Server) {
@@ -129,6 +131,7 @@ export class RoomManager {
           const cap = Number(process.env.TEST_PAYOUT_SATS || 0);
           const amountSats = cap > 0 ? Math.min(room.prizePool, cap) : room.prizePool;
           socket.emit('payoutRequested', { roomId, amountSats });
+          this.startPayoutTimeout(roomId);
           console.log(`[RoomManager] Re-sent payoutRequested to rejoined winner ${pubkey}`);
         }
 
@@ -209,6 +212,7 @@ export class RoomManager {
       const resp = await axios.post(`${this.BACKEND_API}/payout`, { bolt11, amountSats });
 
       room.payoutStatus = 'paid';
+      this.clearPayoutTimeout(roomId);
       socket.emit('payoutSent', { roomId, paymentHash: resp.data?.paymentHash });
       console.log(`Payout successful for room ${roomId}: paymentHash=${resp.data?.paymentHash}`);
     } catch (e: any) {
@@ -298,6 +302,52 @@ export class RoomManager {
     this.rooms.delete(roomId);
   }
 
+  // ── Payout claim timeout (10 min) ──
+
+  startPayoutTimeout(roomId: string) {
+    if (this.payoutTimeouts.has(roomId)) return; // already ticking
+    const timer = setTimeout(() => this.handlePayoutTimeout(roomId), this.PAYOUT_TIMEOUT_MS);
+    this.payoutTimeouts.set(roomId, timer);
+    console.log(`[RoomManager] Started ${this.PAYOUT_TIMEOUT_MS / 1000}s payout timeout for room ${roomId}`);
+  }
+
+  private clearPayoutTimeout(roomId: string) {
+    const timer = this.payoutTimeouts.get(roomId);
+    if (timer) {
+      clearTimeout(timer);
+      this.payoutTimeouts.delete(roomId);
+    }
+  }
+
+  private handlePayoutTimeout(roomId: string) {
+    this.payoutTimeouts.delete(roomId);
+    const room = this.rooms.get(roomId);
+    if (!room) return;
+
+    // If already paid, nothing to do
+    if (room.payoutStatus === 'paid') return;
+
+    console.log(`[RoomManager] Payout timeout for room ${roomId} — winner did not claim within ${this.PAYOUT_TIMEOUT_MS / 1000}s`);
+
+    // Notify any connected sockets in this room
+    this.io.to(roomId).emit('payoutExpired', {
+      roomId,
+      message: 'Payout expired — you did not claim your winnings in time.',
+    });
+
+    // Clean up socket mappings for this room
+    for (const [sid, rid] of this.socketRooms) {
+      if (rid === roomId) {
+        const sock = this.io.sockets.sockets.get(sid);
+        if (sock) sock.leave(roomId);
+        this.socketRooms.delete(sid);
+      }
+    }
+
+    // Remove the room
+    this.rooms.delete(roomId);
+  }
+
   async handleLeaveRoom(socket: Socket, explicit = false) {
     const roomId = this.socketRooms.get(socket.id);
     if (!roomId) return;
@@ -343,6 +393,7 @@ export class RoomManager {
     // IMPORTANT: do NOT delete socketRooms here so payout can be retried on the same socket.
     if (!explicit && room.status === 'finished' && room.payoutStatus !== 'paid') {
       console.log(`[RoomManager] Socket ${socket.id} disconnected (reconnect?) — keeping finished room ${roomId} alive for payout`);
+      this.startPayoutTimeout(roomId);
       return;
     }
 
@@ -379,6 +430,7 @@ export class RoomManager {
       // Don't delete rooms with pending payouts
       if (room.status === 'finished' && room.payoutStatus && room.payoutStatus !== 'paid' && room.payoutStatus !== 'none') {
         console.log(`[RoomManager] Room ${roomId} empty but payout pending — keeping alive`);
+        this.startPayoutTimeout(roomId);
       } else {
         this.clearRoomTimeout(roomId);
         this.rooms.delete(roomId);
