@@ -247,6 +247,7 @@ const GameScreen = ({ navigation }: any) => {
     };
 
     const onShowWait = () => {
+      if (statusRef.current === 'disqualified') return;
       setStatus('wait');
       Animated.timing(bgAnim, {
         toValue: 1,
@@ -256,6 +257,7 @@ const GameScreen = ({ navigation }: any) => {
     };
 
     const onShowGreen = () => {
+      if (statusRef.current === 'disqualified') return;
       setStatus('ready');
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
       Animated.timing(bgAnim, {
@@ -317,6 +319,15 @@ const GameScreen = ({ navigation }: any) => {
       setPayoutError(data?.error || 'Unknown error');
     };
 
+    const onPayoutExpired = (data: any) => {
+      setPayoutVisible(false);
+      Alert.alert(
+        'Payout Expired',
+        data?.message || 'You did not claim your winnings in time.',
+        [{ text: 'OK', onPress: () => navigation.goBack() }]
+      );
+    };
+
     const onRoomTimeout = (data: any) => {
       Alert.alert(
         'Room Timed Out',
@@ -351,6 +362,7 @@ const GameScreen = ({ navigation }: any) => {
     wsService.on('payoutRequested', onPayoutRequested);
     wsService.on('payoutSent', onPayoutSent);
     wsService.on('payoutFailed', onPayoutFailed);
+    wsService.on('payoutExpired', onPayoutExpired);
     wsService.on('roomTimeout', onRoomTimeout);
     wsService.on('disqualified', onDisqualified);
     wsService.on('error', onWsError);
@@ -392,6 +404,7 @@ const GameScreen = ({ navigation }: any) => {
       wsService.off('payoutRequested');
       wsService.off('payoutSent');
       wsService.off('payoutFailed');
+      wsService.off('payoutExpired');
       wsService.off('roomTimeout');
       wsService.off('disqualified');
       wsService.off('error');
