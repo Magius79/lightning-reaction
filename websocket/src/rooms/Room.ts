@@ -48,6 +48,10 @@ export class Room {
   }
 
   removePlayer(socketId: string) {
+    const player = this.players.get(socketId);
+    if (player?.paid && this.status === 'waiting') {
+      this.prizePool -= Math.floor(this.entryFee * (1 - this.houseEdge));
+    }
     this.players.delete(socketId);
   }
 
