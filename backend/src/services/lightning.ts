@@ -6,6 +6,8 @@ import { HttpError } from '../utils/httpError';
 
 type RequestInit = globalThis.RequestInit;
 
+const LNBITS_TIMEOUT_MS = 25000; // 25s — under the frontend's 30s abort
+
 function lnbitsFetch(url: string, init: RequestInit = {}) {
   // Needed for .onion access (Tor) and optional corporate proxies.
   // NOTE: undici's fetch (Node built-in) does not accept the Node.js `agent` option.
@@ -15,7 +17,25 @@ function lnbitsFetch(url: string, init: RequestInit = {}) {
   if (env.SOCKS_PROXY) {
     logger.warn({ socksProxy: env.SOCKS_PROXY }, 'SOCKS_PROXY is set but not supported with built-in fetch; proceeding without proxy');
   }
-  return fetch(url, init);
+
+  // Apply a timeout so slow Tor responses don't hang the backend indefinitely.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LNBITS_TIMEOUT_MS);
+  const signal = init.signal
+    ? anySignal([init.signal as AbortSignal, controller.signal])
+    : controller.signal;
+
+  return fetch(url, { ...init, signal }).finally(() => clearTimeout(timer));
+}
+
+// Combine multiple AbortSignals (any one aborting cancels the fetch)
+function anySignal(signals: AbortSignal[]): AbortSignal {
+  const controller = new AbortController();
+  for (const signal of signals) {
+    if (signal.aborted) { controller.abort(); break; }
+    signal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+  return controller.signal;
 }
 
 export type CreateInvoiceResult = {
