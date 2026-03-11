@@ -68,9 +68,27 @@ export class RoomManager {
         this.startRoomTimeout(roomId);
       }
 
-      room.addPlayer(socket, pubkey);
+      // Check if this pubkey is already in the room (reconnected with a new socket).
+      // If so, update the socket reference but DON'T add to the prize pool again.
+      let alreadyInRoom = false;
+      for (const [oldSocketId, player] of room.players) {
+        if (player.pubkey === pubkey) {
+          // Re-map to the new socket
+          room.players.set(socket.id, player);
+          player.socketId = socket.id;
+          room.players.delete(oldSocketId);
+          this.socketRooms.delete(oldSocketId);
+          alreadyInRoom = true;
+          console.log(`[joinRoom] Pubkey ${pubkey} already in room ${roomId} — remapped socket ${oldSocketId} → ${socket.id}`);
+          break;
+        }
+      }
+
+      if (!alreadyInRoom) {
+        room.addPlayer(socket, pubkey);
+        room.setPlayerPaid(socket.id, paymentHash.startsWith('credit_'));
+      }
       socket.join(roomId);
-      room.setPlayerPaid(socket.id, paymentHash.startsWith('credit_'));
       this.socketRooms.set(socket.id, roomId);
 
       this.io.to(roomId).emit('roomUpdated', {
