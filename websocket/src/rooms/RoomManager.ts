@@ -447,7 +447,11 @@ export class RoomManager {
         this.rooms.delete(roomId);
       }
     } else if (room.status !== 'waiting' && room.status !== 'finished' && room.getPlayerCount() < 2) {
-      this.gameEngine.endGame(roomId, null);
+      // Last player standing wins the pot
+      const remainingPlayer = room.players.values().next().value;
+      const winnerSocketId = remainingPlayer ? remainingPlayer.socketId : null;
+      console.log(`[RoomManager] Opponent left room ${roomId} mid-game — awarding win to remaining player ${remainingPlayer?.pubkey}`);
+      this.gameEngine.endGame(roomId, winnerSocketId);
     }
   }
 
