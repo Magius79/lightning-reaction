@@ -27,6 +27,11 @@ export class GameEngine {
 
     let countdown = 3;
     const countdownInterval = setInterval(() => {
+      // If the game already ended (e.g. opponent left during countdown), stop.
+      if (room.status === 'finished') {
+        clearInterval(countdownInterval);
+        return;
+      }
       countdown--;
       if (countdown > 0) {
         this.io.to(roomId).emit('roomUpdated', {
@@ -45,13 +50,17 @@ export class GameEngine {
 
   showWait(roomId: string) {
     const room = this.rooms.get(roomId);
-    if (!room) return;
+    if (!room || room.status === 'finished') return;
 
     room.status = 'wait';
     this.io.to(roomId).emit('showWait', { message: 'WAIT...' });
 
     const randomDelay = Math.floor(Math.random() * 6000) + 2000; // 2-8 seconds
     setTimeout(() => {
+      // If the room was already finished (e.g. opponent forfeited during wait),
+      // don't overwrite the status back to green.
+      if (!room || room.status !== 'wait') return;
+
       const greenTime = Date.now();
       room.status = 'green';
       room.setGreenTimestamp(greenTime);
@@ -137,9 +146,14 @@ export class GameEngine {
       this.io.to(winnerSocketId).emit('payoutRequested', { roomId, amountSats });
     }
 
-    // Clean up room after game ends
+    // Safety fallback: clean up room if still hanging after 15 min.
+    // The 10-min payout timeout in RoomManager should fire first in normal cases;
+    // this catches edge cases where the payout timeout was never started.
     setTimeout(() => {
-      this.rooms.delete(roomId);
-    }, 5 * 60 * 1000); // 5 minutes
+      if (this.rooms.has(roomId)) {
+        console.log(`[GameEngine] Safety cleanup: deleting stale room ${roomId}`);
+        this.rooms.delete(roomId);
+      }
+    }, 15 * 60 * 1000);
   }
 }
