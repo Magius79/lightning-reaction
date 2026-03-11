@@ -37,6 +37,22 @@ export class Room {
   }
 
   addPlayer(socket: Socket, pubkey: string) {
+    // Don't overwrite an existing entry (prevents paid flag reset on duplicate joins)
+    if (this.players.has(socket.id)) return;
+
+    // If this pubkey already has an entry under a different socket (reconnect),
+    // just remap the socket reference — don't create a new entry.
+    for (const [oldSocketId, player] of this.players) {
+      if (player.pubkey === pubkey) {
+        if (oldSocketId !== socket.id) {
+          this.players.set(socket.id, player);
+          player.socketId = socket.id;
+          this.players.delete(oldSocketId);
+        }
+        return;
+      }
+    }
+
     this.players.set(socket.id, {
       socketId: socket.id,
       pubkey,
@@ -61,7 +77,7 @@ export class Room {
 
   setPlayerPaid(socketId: string, isCredit = false) {
     const player = this.players.get(socketId);
-    if (player) {
+    if (player && !player.paid) {
       player.paid = true;
       // Credits represent a previously-paid entry (room timed out), so they
       // contribute to the prize pool the same as a direct payment.
