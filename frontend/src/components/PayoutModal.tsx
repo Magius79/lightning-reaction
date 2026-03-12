@@ -70,6 +70,7 @@ export default function PayoutModal({ visible, roomId, amountSats, onClose, onSu
   const [lightningAddress, setLightningAddress] = useState<string | null>(null);
   const [secondsLeft, setSecondsLeft] = useState(600); // 10 minutes
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const openedAtRef = useRef<number>(0); // timestamp when modal opened
   const PAYOUT_WINDOW_SECS = 600; // 10 minutes — must match server
 
   // React to actual payout result from WebSocket
@@ -103,12 +104,13 @@ export default function PayoutModal({ visible, roomId, amountSats, onClose, onSu
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, amountSats]);
 
-  // ── 10-minute countdown timer ──
+  // ── 10-minute countdown timer (survives background/sleep) ──
   useEffect(() => {
     if (!visible) {
       // Reset timer when modal closes
       if (countdownRef.current) clearInterval(countdownRef.current);
       countdownRef.current = null;
+      openedAtRef.current = 0;
       setSecondsLeft(PAYOUT_WINDOW_SECS);
       return;
     }
@@ -116,24 +118,30 @@ export default function PayoutModal({ visible, roomId, amountSats, onClose, onSu
     // Don't tick if already paid
     if (payoutStatus === 'success') return;
 
-    countdownRef.current = setInterval(() => {
-      setSecondsLeft((prev) => {
-        if (prev <= 1) {
-          if (countdownRef.current) clearInterval(countdownRef.current);
-          countdownRef.current = null;
-          // Use setTimeout to avoid state update during render
-          setTimeout(() => {
-            onClose();
-            Alert.alert(
-              'Payout Expired',
-              'You did not claim your winnings within 10 minutes.',
-            );
-          }, 0);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+    // Record when the modal opened (only once per open)
+    if (!openedAtRef.current) openedAtRef.current = Date.now();
+
+    const tick = () => {
+      const elapsed = Math.floor((Date.now() - openedAtRef.current) / 1000);
+      const remaining = Math.max(0, PAYOUT_WINDOW_SECS - elapsed);
+      setSecondsLeft(remaining);
+
+      if (remaining <= 0) {
+        if (countdownRef.current) clearInterval(countdownRef.current);
+        countdownRef.current = null;
+        setTimeout(() => {
+          onClose();
+          Alert.alert(
+            'Payout Expired',
+            'You did not claim your winnings within 10 minutes.',
+          );
+        }, 0);
+      }
+    };
+
+    // Tick immediately to catch up after returning from background
+    tick();
+    countdownRef.current = setInterval(tick, 1000);
 
     return () => {
       if (countdownRef.current) clearInterval(countdownRef.current);
