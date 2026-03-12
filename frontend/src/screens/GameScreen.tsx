@@ -225,6 +225,12 @@ const GameScreen = ({ navigation }: any) => {
     const onRoomUpdated = (data: any) => {
       if (Array.isArray(data?.players)) setPlayers(data.players);
 
+      // Capture the actual room ID from the WebSocket server
+      // (may differ from the backend's room ID used during payment)
+      if (data?.roomId) {
+        currentRoomId.current = data.roomId;
+      }
+
       if (data?.status) {
         // Map server-side 'finished' to the frontend 'result' status.
         // Also never override a result/disqualified screen with a stale roomUpdated.
@@ -558,10 +564,10 @@ const GameScreen = ({ navigation }: any) => {
           console.log('paid:', roomId, paymentHash);
           setShowPayment(false);
           setStatus('waiting');
-          currentRoomId.current = roomId;
           joinedAt.current = Date.now();
 
           // joinRoom expects { pubkey, paymentHash }
+          // currentRoomId will be set by the first roomUpdated from the WS server
           wsService.joinRoom(pubkey || 'anon', paymentHash);
         }}
       />

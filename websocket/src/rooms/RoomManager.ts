@@ -188,9 +188,12 @@ export class RoomManager {
 
     const room = this.rooms.get(roomId);
     if (!room) {
-      // Room not found — likely a brief reconnect race. Don't surface as a user-facing error;
-      // the client will retry automatically via rejoinRoom + re-emitted payoutRequested.
-      console.warn(`[submitPayoutInvoice] Room ${roomId} not found for pubkey ${pubkey} — ignoring (reconnect race?)`);
+      // Room no longer exists — payout timed out or server restarted.
+      console.warn(`[submitPayoutInvoice] Room ${roomId} not found for pubkey ${pubkey} — payout expired`);
+      socket.emit('payoutExpired', {
+        roomId,
+        message: 'Payout expired — the room no longer exists.',
+      });
       return;
     }
 
@@ -390,6 +393,15 @@ export class RoomManager {
       room.removePlayer(socket.id);
       this.socketRooms.delete(socket.id);
       socket.leave(roomId);
+
+      // If room is now empty, clean it up immediately
+      if (room.getPlayerCount() === 0) {
+        console.log(`[RoomManager] Room ${roomId} empty after disconnect — cleaning up`);
+        this.clearRoomTimeout(roomId);
+        this.rooms.delete(roomId);
+        return;
+      }
+
       // Notify remaining players of updated count
       this.io.to(roomId).emit('roomUpdated', {
         roomId,
