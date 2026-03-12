@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Modal,
   StyleSheet,
@@ -68,6 +68,9 @@ export default function PayoutModal({ visible, roomId, amountSats, onClose, onSu
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [bolt11, setBolt11] = useState('');
   const [lightningAddress, setLightningAddress] = useState<string | null>(null);
+  const [secondsLeft, setSecondsLeft] = useState(600); // 10 minutes
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const PAYOUT_WINDOW_SECS = 600; // 10 minutes — must match server
 
   // React to actual payout result from WebSocket
   useEffect(() => {
@@ -99,6 +102,45 @@ export default function PayoutModal({ visible, roomId, amountSats, onClose, onSu
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, amountSats]);
+
+  // ── 10-minute countdown timer ──
+  useEffect(() => {
+    if (!visible) {
+      // Reset timer when modal closes
+      if (countdownRef.current) clearInterval(countdownRef.current);
+      countdownRef.current = null;
+      setSecondsLeft(PAYOUT_WINDOW_SECS);
+      return;
+    }
+
+    // Don't tick if already paid
+    if (payoutStatus === 'success') return;
+
+    countdownRef.current = setInterval(() => {
+      setSecondsLeft((prev) => {
+        if (prev <= 1) {
+          if (countdownRef.current) clearInterval(countdownRef.current);
+          countdownRef.current = null;
+          // Use setTimeout to avoid state update during render
+          setTimeout(() => {
+            onClose();
+            Alert.alert(
+              'Payout Expired',
+              'You did not claim your winnings within 10 minutes.',
+            );
+          }, 0);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => {
+      if (countdownRef.current) clearInterval(countdownRef.current);
+      countdownRef.current = null;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, payoutStatus]);
 
   const autoPay = async (address: string, sats: number) => {
     try {
@@ -141,6 +183,9 @@ export default function PayoutModal({ visible, roomId, amountSats, onClose, onSu
   };
 
   const title = amountSats ? `You won ${amountSats} sats! ⚡` : 'You won!';
+  const timerMins = Math.floor(secondsLeft / 60);
+  const timerSecs = secondsLeft % 60;
+  const timerColor = secondsLeft <= 60 ? COLORS.danger : COLORS.textSecondary;
 
   return (
     <Modal visible={visible} transparent animationType="slide">
@@ -156,6 +201,12 @@ export default function PayoutModal({ visible, roomId, amountSats, onClose, onSu
                 <X color={COLORS.textSecondary} size={24} />
               </TouchableOpacity>
             </View>
+
+            {payoutStatus !== 'success' && (
+              <Text style={[styles.timerText, { color: timerColor }]}>
+                Claim within {timerMins}:{timerSecs.toString().padStart(2, '0')}
+              </Text>
+            )}
 
             <ScrollView
               style={{ width: '100%' }}
@@ -270,6 +321,12 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     flex: 1,
     marginRight: 12,
+  },
+  timerText: {
+    fontSize: 14,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginBottom: 12,
   },
   content: {
     alignItems: 'center',
