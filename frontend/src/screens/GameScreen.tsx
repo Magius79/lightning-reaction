@@ -452,8 +452,9 @@ const GameScreen = ({ navigation }: any) => {
   };
 
   const handlePlayAgain = () => {
-    // Per-round entry fee: force payment modal again
-    wsService.leaveRoom();
+    // Don't call leaveRoom() here — the finished room is already handled by
+    // the payout timeout, and the explicit leave races with the next joinRoom,
+    // causing the player to be removed from the new room they just entered.
     resetForNewRound();
     setShowPayment(true);
     setStatus('paying');
