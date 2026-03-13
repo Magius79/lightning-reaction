@@ -74,7 +74,7 @@ export class GameEngine {
   private scheduleBotTap(roomId: string, room: Room) {
     for (const [socketId, player] of room.players) {
       if (isBot(socketId) && !player.disqualified) {
-        const botDelay = Math.floor(Math.random() * 200) + 200; // 200-400ms
+        const botDelay = Math.floor(Math.random() * 400) + 500; // 500-900ms (accounts for network latency)
         setTimeout(() => {
           if (room.status !== 'green') return; // game already ended
           const tapTime = Date.now();
