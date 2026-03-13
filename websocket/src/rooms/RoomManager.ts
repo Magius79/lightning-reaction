@@ -1,6 +1,6 @@
 import { Server, Socket } from 'socket.io';
 import axios from 'axios';
-import { Room } from './Room';
+import { Room, isBot, BOT_PUBKEY } from './Room';
 import { Matchmaker } from './Matchmaker';
 import { GameEngine } from '../game/GameEngine';
 
@@ -13,11 +13,13 @@ export class RoomManager {
   private readonly BACKEND_API = process.env.BACKEND_API_URL || 'http://localhost:4000';
   private readonly ROOM_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
   private readonly PAYOUT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes to claim winnings
+  private readonly BOT_JOIN_DELAY_MS = 30 * 1000; // 30 seconds before bot joins
 
   // roomId -> winnerPubkey -> resolved
   private payoutInFlight: Set<string> = new Set();
   private roomTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private payoutTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private botTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private socketRooms: Map<string, string> = new Map(); // socketId -> roomId
 
   constructor(io: Server) {
@@ -105,7 +107,10 @@ export class RoomManager {
 
       if (room.getPlayerCount() >= 2 && room.status === 'waiting') {
         this.clearRoomTimeout(roomId);
+        this.clearBotTimeout(roomId);
         this.gameEngine.startGame(roomId);
+      } else if (room.getPlayerCount() === 1 && room.status === 'waiting') {
+        this.startBotTimeout(roomId);
       }
     } catch (error) {
       socket.emit('error', { message: 'Failed to join room' });
@@ -374,6 +379,47 @@ export class RoomManager {
     this.rooms.delete(roomId);
   }
 
+  // ── Bot auto-join (30s) ──
+
+  private startBotTimeout(roomId: string) {
+    if (this.botTimeouts.has(roomId)) return;
+    const timer = setTimeout(() => this.handleBotJoin(roomId), this.BOT_JOIN_DELAY_MS);
+    this.botTimeouts.set(roomId, timer);
+    console.log(`[RoomManager] Started ${this.BOT_JOIN_DELAY_MS / 1000}s bot timer for room ${roomId}`);
+  }
+
+  private clearBotTimeout(roomId: string) {
+    const timer = this.botTimeouts.get(roomId);
+    if (timer) {
+      clearTimeout(timer);
+      this.botTimeouts.delete(roomId);
+    }
+  }
+
+  private handleBotJoin(roomId: string) {
+    this.botTimeouts.delete(roomId);
+    const room = this.rooms.get(roomId);
+    if (!room || room.status !== 'waiting' || room.getPlayerCount() < 1) return;
+
+    // Don't add bot if a second player has already joined
+    if (room.getPlayerCount() >= 2) return;
+
+    const botSocketId = room.addBotPlayer(roomId);
+    console.log(`[RoomManager] ⚡ Bot joined room ${roomId} (socketId=${botSocketId})`);
+
+    // Notify the real player that the bot joined
+    this.io.to(roomId).emit('roomUpdated', {
+      roomId,
+      players: Array.from(room.players.values()),
+      status: room.status,
+      countdown: 0,
+    });
+
+    // Start the game
+    this.clearRoomTimeout(roomId);
+    this.gameEngine.startGame(roomId);
+  }
+
   async handleLeaveRoom(socket: Socket, explicit = false) {
     const roomId = this.socketRooms.get(socket.id);
     if (!roomId) return;
@@ -392,6 +438,7 @@ export class RoomManager {
     // If they reconnect they'll go through joinRoom again (credit or re-pay).
     if (!explicit && room.status === 'waiting') {
       console.log(`[RoomManager] Socket ${socket.id} disconnected in waiting room ${roomId} — crediting and removing player`);
+      this.clearBotTimeout(roomId);
 
       if (player?.paid) {
         try {
@@ -468,6 +515,7 @@ export class RoomManager {
         this.startPayoutTimeout(roomId);
       } else {
         this.clearRoomTimeout(roomId);
+        this.clearBotTimeout(roomId);
         this.rooms.delete(roomId);
       }
     } else if (room.status !== 'waiting' && room.status !== 'finished' && room.getPlayerCount() < 2) {

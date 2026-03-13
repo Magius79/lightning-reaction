@@ -1,5 +1,12 @@
 import { Socket } from 'socket.io';
 
+export const BOT_PUBKEY = 'bot_lightning_reaction';
+export const BOT_SOCKET_PREFIX = 'bot_';
+
+export function isBot(socketId: string): boolean {
+  return socketId.startsWith(BOT_SOCKET_PREFIX);
+}
+
 interface PlayerState {
   socketId: string;
   pubkey: string;
@@ -61,6 +68,23 @@ export class Room {
       reactionTime: null,
       disqualified: false,
     });
+  }
+
+  addBotPlayer(roomId: string) {
+    const botSocketId = `${BOT_SOCKET_PREFIX}${roomId}`;
+    if (this.players.has(botSocketId)) return botSocketId;
+
+    this.players.set(botSocketId, {
+      socketId: botSocketId,
+      pubkey: BOT_PUBKEY,
+      paid: true, // house-funded
+      tapTime: null,
+      reactionTime: null,
+      disqualified: false,
+    });
+    // House stakes the bot's entry
+    this.prizePool += Math.floor(this.entryFee * (1 - this.houseEdge));
+    return botSocketId;
   }
 
   removePlayer(socketId: string) {

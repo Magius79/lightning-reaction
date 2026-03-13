@@ -1,6 +1,6 @@
 import { Server } from 'socket.io';
 import axios from 'axios';
-import { Room } from '../rooms/Room';
+import { Room, isBot, BOT_PUBKEY } from '../rooms/Room';
 import { AntiCheat } from './AntiCheat';
 
 export class GameEngine {
@@ -65,7 +65,28 @@ export class GameEngine {
       room.status = 'green';
       room.setGreenTimestamp(greenTime);
       this.io.to(roomId).emit('showGreen', { timestamp: greenTime });
+
+      // Schedule bot tap if there's a bot in the room
+      this.scheduleBotTap(roomId, room);
     }, randomDelay);
+  }
+
+  private scheduleBotTap(roomId: string, room: Room) {
+    for (const [socketId, player] of room.players) {
+      if (isBot(socketId) && !player.disqualified) {
+        const botDelay = Math.floor(Math.random() * 200) + 200; // 200-400ms
+        setTimeout(() => {
+          if (room.status !== 'green') return; // game already ended
+          const tapTime = Date.now();
+          room.recordTap(socketId, tapTime);
+          console.log(`[GameEngine] Bot tapped in room ${roomId} with ${tapTime - (room.greenTimestamp ?? 0)}ms reaction time`);
+          // Only end game if no human has tapped yet (first tap wins)
+          if (room.status === 'green') {
+            this.endGame(roomId, socketId);
+          }
+        }, botDelay);
+      }
+    }
   }
 
   handleTap(roomId: string, socketId: string, clientTimestamp: number) {
@@ -119,7 +140,10 @@ export class GameEngine {
     // Track winner for payout handshake
     room.winnerSocketId = winnerSocketId;
     room.winnerPubkey = winner?.pubkey || null;
-    room.payoutStatus = winner ? 'requested' : 'none';
+
+    // If bot won, no payout needed — sats stay in the house
+    const botWon = winnerSocketId ? isBot(winnerSocketId) : false;
+    room.payoutStatus = (winner && !botWon) ? 'requested' : 'none';
 
     this.io.to(roomId).emit('gameEnd', {
       roomId,
@@ -129,28 +153,34 @@ export class GameEngine {
       results,
     });
 
-    // Update player stats in the backend
+    // Update player stats in the backend (skip bot)
     try {
-      const statsPayload = Array.from(room.players.values()).map((player) => ({
-        pubkey: player.pubkey,
-        won: player.pubkey === winner?.pubkey,
-        reactionTime: player.reactionTime ?? null,
-      }));
-      await axios.post(`${this.BACKEND_API}/api/rooms/update-stats`, { players: statsPayload });
-      console.log(`[GameEngine] Updated stats for ${statsPayload.length} players in room ${roomId}`);
+      const statsPayload = Array.from(room.players.values())
+        .filter((player) => player.pubkey !== BOT_PUBKEY)
+        .map((player) => ({
+          pubkey: player.pubkey,
+          won: player.pubkey === winner?.pubkey,
+          reactionTime: player.reactionTime ?? null,
+        }));
+      if (statsPayload.length > 0) {
+        await axios.post(`${this.BACKEND_API}/api/rooms/update-stats`, { players: statsPayload });
+        console.log(`[GameEngine] Updated stats for ${statsPayload.length} players in room ${roomId}`);
+      }
     } catch (e: any) {
       console.error('[GameEngine] Failed to update stats:', e?.message);
     }
 
     // Request a BOLT11 invoice from the winner client; RoomManager will complete payout.
-    // For local testing, you can cap payout via TEST_PAYOUT_SATS.
-    if (winnerSocketId && winner) {
+    // Skip if bot won — sats stay in the house wallet.
+    if (winnerSocketId && winner && !botWon) {
       const cap = Number(process.env.TEST_PAYOUT_SATS || 0);
       const amountSats = cap > 0 ? Math.min(room.prizePool, cap) : room.prizePool;
       console.log(
         `Requesting payout invoice from winner (socket ${winnerSocketId}) for ${amountSats} sats (pool=${room.prizePool}) in room ${roomId}`
       );
       this.io.to(winnerSocketId).emit('payoutRequested', { roomId, amountSats });
+    } else if (botWon) {
+      console.log(`[GameEngine] Bot won room ${roomId} — no payout, ${room.prizePool} sats stay in house`);
     }
 
     // Safety fallback: clean up room if still hanging after 15 min.
