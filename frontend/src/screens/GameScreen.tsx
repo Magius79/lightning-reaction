@@ -9,11 +9,12 @@ import {
   Dimensions,
   AppState,
   Easing,
+  Share,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS } from '../constants/theme';
 import { wsService } from '../services/websocket';
-import { X, Users } from 'lucide-react-native';
+import { X, Users, Share2 } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { Audio } from 'expo-av';
 import PaymentModal from '../components/PaymentModal';
@@ -22,6 +23,12 @@ import PayoutModal from '../components/PayoutModal';
 const { width } = Dimensions.get('window');
 
 type GameStatus = 'waiting' | 'countdown' | 'wait' | 'ready' | 'result' | 'paying' | 'disqualified';
+
+const BOT_PUBKEY = 'bot_lightning_reaction';
+function displayName(pubkey: string): string {
+  if (pubkey === BOT_PUBKEY) return '⚡ LR Bot';
+  return `${pubkey.slice(0, 8)}…`;
+}
 
 // Preload sounds
 const sounds: Record<string, Audio.Sound | null> = {
@@ -460,6 +467,17 @@ const GameScreen = ({ navigation }: any) => {
     setStatus('paying');
   };
 
+  const handleShareWin = async () => {
+    const timeStr = reactionTime ? `in ${reactionTime}ms ` : '';
+    const satsStr = prizePool ? `${prizePool} sats` : 'sats';
+    const message = `⚡ I just won ${satsStr} ${timeStr}on Lightning Reaction! Think you can beat me?\n\nDownload on Zapstore and challenge me! 🎮⚡\nhttps://zapstore.dev`;
+    try {
+      await Share.share({ message });
+    } catch (e) {
+      // User cancelled or share failed — no action needed
+    }
+  };
+
   const isWinner = winnerPubkey && pubkey && winnerPubkey === pubkey;
   const timeRemaining = Math.max(0, 300 - waitingSeconds);
   const minutes = Math.floor(timeRemaining / 60);
@@ -540,7 +558,7 @@ const GameScreen = ({ navigation }: any) => {
 
               {winnerPubkey && winnerPubkey !== pubkey ? (
                 <Text style={styles.resultSubtitle}>
-                  {`Winner: ${winnerPubkey.slice(0, 8)}…`}
+                  {`Winner: ${displayName(winnerPubkey)}`}
                 </Text>
               ) : !winnerPubkey ? (
                 <Text style={styles.resultSubtitle}>No winner</Text>
@@ -549,6 +567,13 @@ const GameScreen = ({ navigation }: any) => {
               <TouchableOpacity style={styles.actionButton} onPress={handlePlayAgain}>
                 <Text style={styles.actionButtonText}>Play Again</Text>
               </TouchableOpacity>
+
+              {isWinner && (
+                <TouchableOpacity style={styles.shareButton} onPress={handleShareWin}>
+                  <Share2 size={18} color={COLORS.text} />
+                  <Text style={styles.shareButtonText}>Share your win</Text>
+                </TouchableOpacity>
+              )}
             </Animated.View>
           )}
         </View>
@@ -688,6 +713,23 @@ const styles = StyleSheet.create({
   },
 
   actionButtonText: { color: '#000', fontSize: 18, fontWeight: 'bold' },
+
+  shareButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  shareButtonText: {
+    color: COLORS.text,
+    fontSize: 15,
+    fontWeight: '600',
+  },
 });
 
 export default GameScreen;
