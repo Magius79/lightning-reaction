@@ -52,6 +52,18 @@ export class RoomManager {
         }
       }
 
+      // If this pubkey is already in any active (non-finished) room, don't create a second entry.
+      // This prevents duplicate sockets from creating phantom rooms that generate false credits.
+      for (const [, existingRoom] of this.rooms) {
+        if (existingRoom.status === 'finished') continue;
+        for (const [, player] of existingRoom.players) {
+          if (player.pubkey === pubkey) {
+            console.log(`[joinRoom] Pubkey ${pubkey} already in active room ${existingRoom.id} — ignoring duplicate join`);
+            return;
+          }
+        }
+      }
+
       const roomId = process.env.FORCE_ROOM_ID || this.matchmaker.findAvailableRoom();
       console.log('[joinRoom] roomId=', roomId, 'FORCE_ROOM_ID=', process.env.FORCE_ROOM_ID);
 
