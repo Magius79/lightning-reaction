@@ -471,11 +471,15 @@ export class RoomManager {
         this.rooms.delete(roomId);
       }
     } else if (room.status !== 'waiting' && room.status !== 'finished' && room.getPlayerCount() < 2) {
-      // Last player standing wins the pot
+      // Last player standing wins the pot — unless they're disqualified
       const remainingPlayer = room.players.values().next().value;
-      const winnerSocketId = remainingPlayer ? remainingPlayer.socketId : null;
-      console.log(`[RoomManager] Opponent left room ${roomId} mid-game — awarding win to remaining player ${remainingPlayer?.pubkey}`);
-      this.gameEngine.endGame(roomId, winnerSocketId);
+      if (remainingPlayer && !remainingPlayer.disqualified) {
+        console.log(`[RoomManager] Opponent left room ${roomId} mid-game — awarding win to remaining player ${remainingPlayer.pubkey}`);
+        this.gameEngine.endGame(roomId, remainingPlayer.socketId);
+      } else {
+        console.log(`[RoomManager] Opponent left room ${roomId} mid-game — remaining player is disqualified, no winner`);
+        this.gameEngine.endGame(roomId, null);
+      }
     }
   }
 

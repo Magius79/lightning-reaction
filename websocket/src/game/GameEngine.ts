@@ -76,6 +76,13 @@ export class GameEngine {
     if (room.status === 'wait') {
       room.disqualifyPlayer(socketId);
       this.io.to(socketId).emit('disqualified', { message: 'You tapped too early! You are disqualified from this round.' });
+
+      // If all players are now disqualified, end the game with no winner
+      const allDq = Array.from(room.players.values()).every((p) => p.disqualified);
+      if (allDq) {
+        console.log(`[GameEngine] All players disqualified in room ${roomId} — ending with no winner`);
+        this.endGame(roomId, null);
+      }
       return;
     }
 
