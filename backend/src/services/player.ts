@@ -53,6 +53,11 @@ function ensureCreditsColumn() {
   } catch {
     // Column already exists — safe to ignore
   }
+  try {
+    db.exec('ALTER TABLE players ADD COLUMN credited_at INTEGER');
+  } catch {
+    // Column already exists — safe to ignore
+  }
 }
 
 let creditsColumnReady = false;
@@ -63,23 +68,36 @@ function initCredits() {
   }
 }
 
+const CREDIT_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
 export function getPlayerCredits(pubkey: string): number {
   initCredits();
   const db = getDb();
-  const row = db.prepare('SELECT credits FROM players WHERE pubkey = ?').get(pubkey) as { credits: number } | undefined;
-  return row?.credits ?? 0;
+  const row = db.prepare('SELECT credits, credited_at FROM players WHERE pubkey = ?').get(pubkey) as { credits: number; credited_at: number | null } | undefined;
+  if (!row || row.credits <= 0) return 0;
+
+  // Expire credits older than 24 hours
+  if (row.credited_at && (Date.now() - row.credited_at) > CREDIT_TTL_MS) {
+    db.prepare('UPDATE players SET credits = 0, credited_at = NULL WHERE pubkey = ?').run(pubkey);
+    console.log(`[player] Expired ${row.credits} credit(s) for ${pubkey} (granted ${Math.round((Date.now() - row.credited_at) / 3600000)}h ago)`);
+    return 0;
+  }
+
+  return row.credits;
 }
 
 export function addPlayerCredit(pubkey: string): void {
   initCredits();
   const db = getDb();
-  db.prepare('UPDATE players SET credits = credits + 1 WHERE pubkey = ?').run(pubkey);
+  db.prepare('UPDATE players SET credits = credits + 1, credited_at = ? WHERE pubkey = ?').run(Date.now(), pubkey);
 }
 
 export function usePlayerCredit(pubkey: string): void {
   initCredits();
   const db = getDb();
   db.prepare('UPDATE players SET credits = credits - 1 WHERE pubkey = ? AND credits > 0').run(pubkey);
+  // Clear timestamp if no credits remain
+  db.prepare('UPDATE players SET credited_at = NULL WHERE pubkey = ? AND credits <= 0').run(pubkey);
 }
 
 export function updatePlayerStats(pubkey: string, won: boolean, reactionTime: number | null): void {
