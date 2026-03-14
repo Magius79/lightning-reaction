@@ -362,8 +362,15 @@ const GameScreen = ({ navigation }: any) => {
 
     // Make server rejections visible (RoomManager uses socket.emit('error', ...))
     const onWsError = (data: any) => {
+      const msg = data?.message || '';
+      // Silence harmless reconnect noise
+      const silenced = ['Room not found', 'Player not found in room'];
+      if (silenced.some((s) => msg.includes(s))) {
+        console.log('WS error (silenced)', msg);
+        return;
+      }
       console.log('WS error', data);
-      Alert.alert('WS error', data?.message || JSON.stringify(data));
+      Alert.alert('WS error', msg || JSON.stringify(data));
     };
 
     wsService.on('roomUpdated', onRoomUpdated);
@@ -384,6 +391,9 @@ const GameScreen = ({ navigation }: any) => {
     const onReconnect = () => {
       const rid = currentRoomId.current;
       if (!rid || !joinedAt.current) return;
+
+      // Don't rejoin if the game is already finished
+      if (statusRef.current === 'result' || statusRef.current === 'paying') return;
 
       const elapsed = Date.now() - joinedAt.current;
 
