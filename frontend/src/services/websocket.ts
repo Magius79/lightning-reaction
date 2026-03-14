@@ -22,6 +22,10 @@ class WebSocketService {
     this.socket?.emit('joinRoom', { pubkey, paymentHash });
   }
 
+  joinFreeplay(pubkey: string) {
+    this.socket?.emit('joinFreeplay', { pubkey });
+  }
+
   sendTap(timestamp: number) {
     this.socket?.emit('tap', { timestamp });
   }

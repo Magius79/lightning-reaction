@@ -134,8 +134,9 @@ const PulsingDot = ({ delay = 0 }: { delay?: number }) => {
   );
 };
 
-const GameScreen = ({ navigation }: any) => {
-  const [status, setStatus] = useState<GameStatus>('paying');
+const GameScreen = ({ navigation, route }: any) => {
+  const freeplay = route?.params?.freeplay === true;
+  const [status, setStatus] = useState<GameStatus>(freeplay ? 'waiting' : 'paying');
   const [players, setPlayers] = useState<any[]>([]);
   const [countdown, setCountdown] = useState(0);
   const [reactionTime, setReactionTime] = useState<number | null>(null);
@@ -144,7 +145,7 @@ const GameScreen = ({ navigation }: any) => {
   // websocket `gameEnd` sends winner as pubkey string (or null)
   const [winnerPubkey, setWinnerPubkey] = useState<string | null>(null);
 
-  const [showPayment, setShowPayment] = useState(true);
+  const [showPayment, setShowPayment] = useState(!freeplay);
   const [pubkey, setPubkey] = useState<string>(''); // load from AsyncStorage
 
   // Payout UI state (winner pastes invoice)
@@ -197,6 +198,17 @@ const GameScreen = ({ navigation }: any) => {
   useEffect(() => {
     pubkeyRef.current = pubkey;
   }, [pubkey]);
+
+  // Freeplay: join immediately once pubkey is loaded and socket connected
+  useEffect(() => {
+    if (!freeplay || !pubkey || pubkey === 'anon') return;
+    const timer = setTimeout(() => {
+      joinedAt.current = Date.now();
+      wsService.joinFreeplay(pubkey);
+    }, 500);
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [freeplay, pubkey]);
 
   // Start/stop waiting room timer
   useEffect(() => {
@@ -560,29 +572,42 @@ const GameScreen = ({ navigation }: any) => {
                 </Text>
               ) : null}
 
-              {prizePool ? (
+              {!freeplay && prizePool ? (
                 <Text style={styles.prizeText}>
                   {isWinner ? `Prize: ${prizePool} sats` : `Pot was ${prizePool} sats`}
                 </Text>
               ) : null}
 
-              {winnerPubkey && winnerPubkey !== pubkey ? (
+              {!freeplay && winnerPubkey && winnerPubkey !== pubkey ? (
                 <Text style={styles.resultSubtitle}>
                   {`Winner: ${displayName(winnerPubkey)}`}
                 </Text>
-              ) : !winnerPubkey ? (
+              ) : !freeplay && !winnerPubkey ? (
                 <Text style={styles.resultSubtitle}>No winner</Text>
               ) : null}
 
-              <TouchableOpacity style={styles.actionButton} onPress={handlePlayAgain}>
-                <Text style={styles.actionButtonText}>Play Again</Text>
-              </TouchableOpacity>
+              {freeplay ? (
+                <>
+                  <TouchableOpacity style={styles.actionButton} onPress={() => navigation.replace('Game', { freeplay: true })}>
+                    <Text style={styles.actionButtonText}>Try Again</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.playForRealButton} onPress={() => navigation.replace('Game')}>
+                    <Text style={styles.playForRealText}>Play for Real Sats ⚡</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  <TouchableOpacity style={styles.actionButton} onPress={handlePlayAgain}>
+                    <Text style={styles.actionButtonText}>Play Again</Text>
+                  </TouchableOpacity>
 
-              {isWinner && (
-                <TouchableOpacity style={styles.shareButton} onPress={handleShareWin}>
-                  <Share2 size={18} color={COLORS.text} />
-                  <Text style={styles.shareButtonText}>Share your win</Text>
-                </TouchableOpacity>
+                  {isWinner && (
+                    <TouchableOpacity style={styles.shareButton} onPress={handleShareWin}>
+                      <Share2 size={18} color={COLORS.text} />
+                      <Text style={styles.shareButtonText}>Share your win</Text>
+                    </TouchableOpacity>
+                  )}
+                </>
               )}
             </Animated.View>
           )}
@@ -739,6 +764,19 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     fontSize: 15,
     fontWeight: '600',
+  },
+  playForRealButton: {
+    marginTop: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 30,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: COLORS.primary,
+  },
+  playForRealText: {
+    color: COLORS.primary,
+    fontSize: 16,
+    fontWeight: '800',
   },
 });
 

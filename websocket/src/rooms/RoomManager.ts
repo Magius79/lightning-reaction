@@ -118,6 +118,44 @@ export class RoomManager {
     }
   }
 
+  handleJoinFreeplay(socket: Socket, data: { pubkey: string }) {
+    const pubkey = data?.pubkey;
+    if (!pubkey) {
+      socket.emit('error', { message: 'Missing pubkey' });
+      return;
+    }
+
+    try {
+      const roomId = `freeplay_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+      const room = new Room(roomId, true);
+      this.rooms.set(roomId, room);
+
+      // Add human player (no payment needed)
+      room.addPlayer(socket, pubkey);
+      room.players.get(socket.id)!.paid = true; // mark as "paid" so game logic works
+      socket.join(roomId);
+      this.socketRooms.set(socket.id, roomId);
+
+      // Add bot immediately
+      const botSocketId = room.addBotPlayer(roomId);
+      console.log(`[RoomManager] ⚡ Freeplay room ${roomId}: ${pubkey} vs bot`);
+
+      // Notify player
+      this.io.to(roomId).emit('roomUpdated', {
+        roomId,
+        players: Array.from(room.players.values()),
+        status: room.status,
+        countdown: 0,
+      });
+
+      // Start game immediately
+      this.gameEngine.startGame(roomId);
+    } catch (error) {
+      socket.emit('error', { message: 'Failed to start freeplay' });
+      console.error('Freeplay error:', error);
+    }
+  }
+
   handleRejoinRoom(socket: Socket, data: { pubkey: string; roomId: string }) {
     const { pubkey, roomId } = data || ({} as any);
     if (!pubkey || !roomId) return;

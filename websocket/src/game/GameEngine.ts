@@ -141,38 +141,41 @@ export class GameEngine {
     room.winnerSocketId = winnerSocketId;
     room.winnerPubkey = winner?.pubkey || null;
 
-    // If bot won, no payout needed — sats stay in the house
+    // If bot won or freeplay, no payout needed
     const botWon = winnerSocketId ? isBot(winnerSocketId) : false;
-    room.payoutStatus = (winner && !botWon) ? 'requested' : 'none';
+    room.payoutStatus = (winner && !botWon && !room.isFreeplay) ? 'requested' : 'none';
 
     this.io.to(roomId).emit('gameEnd', {
       roomId,
       winner: winner?.pubkey || null,
       reactionTime: winner?.reactionTime || 0,
-      prizePool: room.prizePool,
+      prizePool: room.isFreeplay ? 0 : room.prizePool,
+      freeplay: room.isFreeplay,
       results,
     });
 
-    // Update player stats in the backend (skip bot)
-    try {
-      const statsPayload = Array.from(room.players.values())
-        .filter((player) => player.pubkey !== BOT_PUBKEY)
-        .map((player) => ({
-          pubkey: player.pubkey,
-          won: player.pubkey === winner?.pubkey,
-          reactionTime: player.reactionTime ?? null,
-        }));
-      if (statsPayload.length > 0) {
-        await axios.post(`${this.BACKEND_API}/api/rooms/update-stats`, { players: statsPayload });
-        console.log(`[GameEngine] Updated stats for ${statsPayload.length} players in room ${roomId}`);
+    // Update player stats in the backend (skip bot and freeplay)
+    if (!room.isFreeplay) {
+      try {
+        const statsPayload = Array.from(room.players.values())
+          .filter((player) => player.pubkey !== BOT_PUBKEY)
+          .map((player) => ({
+            pubkey: player.pubkey,
+            won: player.pubkey === winner?.pubkey,
+            reactionTime: player.reactionTime ?? null,
+          }));
+        if (statsPayload.length > 0) {
+          await axios.post(`${this.BACKEND_API}/api/rooms/update-stats`, { players: statsPayload });
+          console.log(`[GameEngine] Updated stats for ${statsPayload.length} players in room ${roomId}`);
+        }
+      } catch (e: any) {
+        console.error('[GameEngine] Failed to update stats:', e?.message);
       }
-    } catch (e: any) {
-      console.error('[GameEngine] Failed to update stats:', e?.message);
     }
 
     // Request a BOLT11 invoice from the winner client; RoomManager will complete payout.
-    // Skip if bot won — sats stay in the house wallet.
-    if (winnerSocketId && winner && !botWon) {
+    // Skip if bot won, freeplay, or no winner.
+    if (winnerSocketId && winner && !botWon && !room.isFreeplay) {
       const cap = Number(process.env.TEST_PAYOUT_SATS || 0);
       const amountSats = cap > 0 ? Math.min(room.prizePool, cap) : room.prizePool;
       console.log(
@@ -181,6 +184,8 @@ export class GameEngine {
       this.io.to(winnerSocketId).emit('payoutRequested', { roomId, amountSats });
     } else if (botWon) {
       console.log(`[GameEngine] Bot won room ${roomId} — no payout, ${room.prizePool} sats stay in house`);
+    } else if (room.isFreeplay) {
+      console.log(`[GameEngine] Freeplay room ${roomId} finished — no payout`);
     }
 
     // Safety fallback: clean up room if still hanging after 15 min.

@@ -28,8 +28,9 @@ export class Room {
   prizePool: number;
   greenTimestamp: number | null;
   startTime: number;
+  isFreeplay: boolean;
 
-  constructor(id: string) {
+  constructor(id: string, freeplay = false) {
     this.id = id;
     this.status = 'waiting';
     this.winnerSocketId = null;
@@ -41,6 +42,7 @@ export class Room {
     this.prizePool = 0;
     this.greenTimestamp = null;
     this.startTime = 0;
+    this.isFreeplay = freeplay;
   }
 
   addPlayer(socket: Socket, pubkey: string) {

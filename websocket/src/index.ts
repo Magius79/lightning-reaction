@@ -31,6 +31,7 @@ io.on('connection', (socket) => {
   console.log('New connection:', socket.id);
 
   socket.on('joinRoom', (data) => roomManager.handleJoinRoom(socket, data));
+  socket.on('joinFreeplay', (data) => roomManager.handleJoinFreeplay(socket, data));
   socket.on('rejoinRoom', (data) => roomManager.handleRejoinRoom(socket, data));
   socket.on('tap', (data) => roomManager.handleTap(socket, data));
   socket.on('leaveRoom', () => roomManager.handleLeaveRoom(socket, true));

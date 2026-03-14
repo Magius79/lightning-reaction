@@ -216,6 +216,14 @@ const HomeScreen = ({ navigation }: any) => {
           <Text style={styles.playButtonText}>PLAY NOW</Text>
           <Text style={styles.feeText}>Entry: 100 sats</Text>
         </TouchableOpacity>
+
+        <TouchableOpacity 
+          style={styles.freeplayButton} 
+          onPress={() => navigation.navigate('Game', { freeplay: true })}
+        >
+          <Text style={styles.freeplayButtonText}>TRY FREE</Text>
+          <Text style={styles.freeplaySubtext}>Practice vs Bot</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.leaderboardPreview}>
@@ -349,6 +357,25 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginTop: 4,
     opacity: 0.8,
+  },
+  freeplayButton: {
+    width: '100%',
+    padding: 16,
+    borderRadius: 16,
+    alignItems: 'center',
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  freeplayButtonText: {
+    color: COLORS.text,
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  freeplaySubtext: {
+    color: COLORS.textSecondary,
+    fontSize: 12,
+    marginTop: 2,
   },
   leaderboardPreview: {
     marginBottom: 30,
