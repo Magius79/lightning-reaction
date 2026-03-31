@@ -94,13 +94,14 @@ roomsRouter.post('/update-stats', async (req, res, next) => {
           pubkey: z.string().min(16),
           won: z.boolean(),
           reactionTime: z.number().nullable(),
+          satsWon: z.number().optional().default(0),
         })),
       }),
       req.body
     );
 
     for (const p of body.players) {
-      updatePlayerStats(p.pubkey, p.won, p.reactionTime);
+      updatePlayerStats(p.pubkey, p.won, p.reactionTime, p.satsWon);
     }
 
     console.log('[rooms/update-stats] updated stats for', body.players.length, 'players');

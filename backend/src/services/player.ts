@@ -38,7 +38,8 @@ export function listLeaderboard(limit: number) {
     .prepare(
       `SELECT pubkey, games_won as gamesWon, avg_reaction_time as avgReactionTime, total_winnings as totalWinnings
        FROM players
-       ORDER BY games_won DESC, total_winnings DESC
+       WHERE games_won > 0
+       ORDER BY games_won DESC, avg_reaction_time ASC
        LIMIT ?`
     )
     .all(limit) as Array<{ pubkey: string; gamesWon: number; avgReactionTime: number | null; totalWinnings: number }>;
@@ -100,19 +101,20 @@ export function usePlayerCredit(pubkey: string): void {
   db.prepare('UPDATE players SET credited_at = NULL WHERE pubkey = ? AND credits <= 0').run(pubkey);
 }
 
-export function updatePlayerStats(pubkey: string, won: boolean, reactionTime: number | null): void {
+export function updatePlayerStats(pubkey: string, won: boolean, reactionTime: number | null, satsWon: number = 0): void {
   const db = getDb();
   if (won) {
     db.prepare(
       `UPDATE players SET
         games_played = games_played + 1,
         games_won = games_won + 1,
+        total_winnings = total_winnings + ?,
         avg_reaction_time = CASE
           WHEN avg_reaction_time IS NULL THEN ?
           ELSE (avg_reaction_time * games_played + ?) / (games_played + 1)
         END
       WHERE pubkey = ?`
-    ).run(reactionTime, reactionTime, pubkey);
+    ).run(satsWon, reactionTime, reactionTime, pubkey);
   } else {
     db.prepare(
       `UPDATE players SET
