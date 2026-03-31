@@ -165,6 +165,7 @@ export class GameEngine {
             pubkey: player.pubkey,
             won: player.pubkey === winner?.pubkey,
             reactionTime: player.reactionTime ?? null,
+            satsWon: player.pubkey === winner?.pubkey ? room.prizePool : 0,
           }));
         if (statsPayload.length > 0) {
           await axios.post(`${this.BACKEND_API}/api/rooms/update-stats`, { players: statsPayload });
