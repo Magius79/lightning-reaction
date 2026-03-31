@@ -278,7 +278,21 @@ export class RoomManager {
         )}...`
       );
 
-      const resp = await axios.post(`${this.BACKEND_API}/payout`, { bolt11, amountSats });
+      let resp: any;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          resp = await axios.post(`${this.BACKEND_API}/payout`, { bolt11, amountSats });
+          break;
+        } catch (retryErr: any) {
+          const status = retryErr?.response?.status;
+          console.error(`[Payout] Attempt ${attempt}/3 failed (HTTP ${status || '?'}) for room ${roomId}`);
+          if (attempt < 3 && (!status || status >= 500)) {
+            await new Promise(r => setTimeout(r, 3000 * attempt));
+          } else {
+            throw retryErr;
+          }
+        }
+      }
 
       room.payoutStatus = 'paid';
       this.clearPayoutTimeout(roomId);
