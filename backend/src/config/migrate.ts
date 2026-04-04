@@ -92,7 +92,21 @@ function migrateNpubToHex() {
         ).run(hex, row.display_name, row.games_played, row.games_won, row.total_winnings, row.avg_reaction_time, row.created_at);
       }
 
-      // Update all FK references to point to hex pubkey
+      // Delete npub FK rows that would conflict with existing hex rows (keep hex — it's newer)
+      db.prepare(
+        `DELETE FROM room_players WHERE pubkey = ? AND room_id IN
+           (SELECT room_id FROM room_players WHERE pubkey = ?)`
+      ).run(row.pubkey, hex);
+      db.prepare(
+        `DELETE FROM game_players WHERE pubkey = ? AND game_id IN
+           (SELECT game_id FROM game_players WHERE pubkey = ?)`
+      ).run(row.pubkey, hex);
+      db.prepare(
+        `DELETE FROM transactions WHERE pubkey = ? AND type || ':' || payment_hash IN
+           (SELECT type || ':' || payment_hash FROM transactions WHERE pubkey = ?)`
+      ).run(row.pubkey, hex);
+
+      // Update remaining FK references to point to hex pubkey
       db.prepare('UPDATE room_players SET pubkey = ? WHERE pubkey = ?').run(hex, row.pubkey);
       db.prepare('UPDATE games SET winner_pubkey = ? WHERE winner_pubkey = ?').run(hex, row.pubkey);
       db.prepare('UPDATE game_players SET pubkey = ? WHERE pubkey = ?').run(hex, row.pubkey);
