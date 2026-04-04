@@ -47,7 +47,9 @@ export async function authMiddleware(socket: Socket, next: (err?: Error) => void
   const msgBytes = new TextEncoder().encode(message);
 
   try {
-    const { schnorr, etc } = await import('@noble/secp256k1');
+    const noble: any = await import('@noble/secp256k1');
+    const schnorr = noble.schnorr || noble.default?.schnorr;
+    const etc = noble.etc || noble.default?.etc;
     const valid = await schnorr.verifyAsync(etc.hexToBytes(sig), msgBytes, etc.hexToBytes(pubkey));
     if (!valid) {
       return next(new Error('Invalid signature: verification failed'));
