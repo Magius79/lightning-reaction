@@ -472,7 +472,7 @@ const GameScreen = ({ navigation, route }: any) => {
   }, [navigation]);
 
   const handleTap = () => {
-    if (status === 'ready' || status === 'wait') {
+    if (status === 'ready') {
       const ts = Date.now();
       playSound('tap');
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);

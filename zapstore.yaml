@@ -1,0 +1,21 @@
+repository: https://github.com/Magius79/lightning-reaction
+release_source:
+  url: https://github.com/Magius79/lightning-reaction
+  type: github
+name: Lightning Reaction
+summary: Head-to-head reaction time game for Bitcoin over Lightning
+description: |
+  Test your reflexes and win real Bitcoin! ⚡
+  
+  Pay 100 sats to enter, tap faster than your opponent when the screen turns green, and win the pot.
+  
+  • Play for real sats against real opponents
+  • Practice for free against the bot
+  • Instant payouts via Lightning Network
+  • Nostr identity integration
+  • Share your wins on social media
+images:
+  - screenshots/home.png
+  - screenshots/waiting.png
+  - screenshots/tap.png
+  - screenshots/victory.png

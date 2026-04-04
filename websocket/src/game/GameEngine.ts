@@ -113,10 +113,24 @@ export class GameEngine {
     const player = room.players.get(socketId);
     if (!player || player.disqualified) return;
 
-    if (room.greenTimestamp && this.antiCheat.isUnrealistic(serverTimestamp - room.greenTimestamp)) {
-      console.log(
-        `Suspicious reaction time for ${player.pubkey}: ${serverTimestamp - (room.greenTimestamp ?? 0)}ms`
-      );
+    if (room.greenTimestamp) {
+      const reactionTime = serverTimestamp - room.greenTimestamp;
+      const result = this.antiCheat.validateTap(player.pubkey, reactionTime);
+
+      if (!result.allowed) {
+        room.disqualifyPlayer(socketId);
+        this.io.to(socketId).emit('disqualified', {
+          message: result.reason || 'Disqualified: reaction time too fast',
+        });
+
+        // If all players are now disqualified, end with no winner
+        const allDq = Array.from(room.players.values()).every((p) => p.disqualified);
+        if (allDq) {
+          console.log(`[GameEngine] All players disqualified in room ${roomId} — ending with no winner`);
+          this.endGame(roomId, null);
+        }
+        return;
+      }
     }
 
     room.recordTap(socketId, serverTimestamp);
