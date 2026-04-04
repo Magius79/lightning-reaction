@@ -28,7 +28,7 @@ const io = new Server(httpServer, {
 
 const roomManager = new RoomManager(io);
 
-// Require Nostr Schnorr signature on every connection
+// Validate pubkey on every connection
 io.use(authMiddleware);
 
 io.on('connection', (socket) => {

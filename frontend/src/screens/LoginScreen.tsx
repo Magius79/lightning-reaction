@@ -13,31 +13,74 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS } from '../constants/theme';
 import { Zap } from 'lucide-react-native';
-import { generateKeypair, saveKeypair, loadKeypair, pubkeyFromNsec } from '../services/auth';
+import { savePubkey, loadPubkey } from '../services/auth';
+
+const BECH32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+
+/** Decode an npub1... bech32 string to a 64-char hex pubkey. */
+function npubToHex(npub: string): string | null {
+  try {
+    if (!npub.startsWith('npub1')) return null;
+    const data = npub.slice(5);
+    const values: number[] = [];
+    for (const c of data) {
+      const v = BECH32_CHARSET.indexOf(c);
+      if (v === -1) return null;
+      values.push(v);
+    }
+    // Remove checksum (last 6 values)
+    const payload = values.slice(0, -6);
+    // Convert from 5-bit to 8-bit
+    let bits = 0;
+    let acc = 0;
+    const bytes: number[] = [];
+    for (const v of payload) {
+      acc = (acc << 5) | v;
+      bits += 5;
+      if (bits >= 8) {
+        bits -= 8;
+        bytes.push((acc >> bits) & 0xff);
+      }
+    }
+    if (bytes.length !== 32) return null;
+    return bytes.map((b) => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return null;
+  }
+}
 
 const LoginScreen = ({ navigation }: any) => {
-  const [pubkey, setPubkey] = useState('');
+  const [npub, setNpub] = useState('');
   const [lightningAddress, setLightningAddress] = useState('');
-  const [showImport, setShowImport] = useState(false);
-  const [nsecInput, setNsecInput] = useState('');
 
-  // Auto-generate a keypair on mount if none exists
+  // Load existing pubkey on mount
   useEffect(() => {
     (async () => {
-      const existing = await loadKeypair();
+      const existing = await loadPubkey();
       if (existing) {
-        setPubkey(existing.pubkey);
-      } else {
-        const kp = generateKeypair();
-        await saveKeypair(kp.nsec, kp.pubkey);
-        setPubkey(kp.pubkey);
+        // Already logged in — go straight to Home
+        navigation.replace('Home');
       }
     })();
   }, []);
 
   const handleLogin = async () => {
-    if (pubkey.length < 10) {
-      Alert.alert('Error', 'Keypair not generated. Please restart the app.');
+    const trimmed = npub.trim();
+    if (!trimmed) {
+      Alert.alert('Error', 'Please enter your npub.');
+      return;
+    }
+
+    // Accept either npub1... or raw 64-char hex
+    let hex: string | null = null;
+    if (/^[0-9a-f]{64}$/i.test(trimmed)) {
+      hex = trimmed.toLowerCase();
+    } else {
+      hex = npubToHex(trimmed);
+    }
+
+    if (!hex) {
+      Alert.alert('Invalid Key', 'Enter a valid npub (npub1...) or 64-character hex public key.');
       return;
     }
 
@@ -51,28 +94,11 @@ const LoginScreen = ({ navigation }: any) => {
     }
 
     try {
+      await savePubkey(hex);
       await AsyncStorage.setItem('lightning_address', lightningAddress.trim());
       navigation.replace('Home');
     } catch (e) {
       Alert.alert('Error', 'Failed to save login data.');
-    }
-  };
-
-  const handleImportNsec = async () => {
-    const hex = nsecInput.trim();
-    if (!/^[0-9a-f]{64}$/i.test(hex)) {
-      Alert.alert('Invalid Key', 'Enter a 64-character hex private key.');
-      return;
-    }
-    try {
-      const derived = pubkeyFromNsec(hex);
-      await saveKeypair(hex, derived);
-      setPubkey(derived);
-      setShowImport(false);
-      setNsecInput('');
-      Alert.alert('Imported', `Pubkey: ${derived.slice(0, 12)}...`);
-    } catch {
-      Alert.alert('Invalid Key', 'Could not derive a public key from this private key.');
     }
   };
 
@@ -93,12 +119,16 @@ const LoginScreen = ({ navigation }: any) => {
         </View>
 
         <View style={styles.form}>
-          <Text style={styles.label}>Your Game Identity (pubkey)</Text>
-          <View style={styles.pubkeyDisplay}>
-            <Text style={styles.pubkeyText} selectable>
-              {pubkey ? `${pubkey.slice(0, 16)}...${pubkey.slice(-8)}` : 'Generating...'}
-            </Text>
-          </View>
+          <Text style={styles.label}>Your Nostr Public Key</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="npub1... or 64-char hex"
+            placeholderTextColor="#666"
+            value={npub}
+            onChangeText={setNpub}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
 
           <Text style={styles.label}>
             Lightning Address{' '}
@@ -122,29 +152,6 @@ const LoginScreen = ({ navigation }: any) => {
           <TouchableOpacity style={styles.loginButton} onPress={handleLogin}>
             <Text style={styles.loginButtonText}>Enter Arena</Text>
           </TouchableOpacity>
-
-          <TouchableOpacity style={styles.nostrButton} onPress={() => setShowImport(!showImport)}>
-            <Text style={styles.nostrButtonText}>Import Existing Key</Text>
-          </TouchableOpacity>
-
-          {showImport && (
-            <View style={styles.importContainer}>
-              <Text style={styles.label}>Private Key (64-char hex)</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="hex private key..."
-                placeholderTextColor="#666"
-                value={nsecInput}
-                onChangeText={setNsecInput}
-                autoCapitalize="none"
-                autoCorrect={false}
-                secureTextEntry
-              />
-              <TouchableOpacity style={styles.importButton} onPress={handleImportNsec}>
-                <Text style={styles.loginButtonText}>Import</Text>
-              </TouchableOpacity>
-            </View>
-          )}
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -218,40 +225,6 @@ const styles = StyleSheet.create({
     color: '#000',
     fontSize: 18,
     fontWeight: 'bold',
-  },
-  nostrButton: {
-    borderWidth: 1,
-    borderColor: COLORS.primary,
-    borderRadius: 12,
-    padding: 18,
-    alignItems: 'center',
-  },
-  nostrButtonText: {
-    color: COLORS.primary,
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  pubkeyDisplay: {
-    backgroundColor: COLORS.card,
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#444',
-    marginBottom: 12,
-  },
-  pubkeyText: {
-    color: COLORS.textSecondary,
-    fontSize: 14,
-    fontFamily: 'monospace',
-  },
-  importContainer: {
-    marginTop: 15,
-  },
-  importButton: {
-    backgroundColor: COLORS.primary,
-    borderRadius: 12,
-    padding: 14,
-    alignItems: 'center',
   },
 });
 
