@@ -505,7 +505,13 @@ const GameScreen = ({ navigation, route }: any) => {
 
       if (botCountdownTimer.current) clearInterval(botCountdownTimer.current);
 
-      wsService.leaveRoom();
+      // Only send leaveRoom if still waiting — once the game has started
+      // (countdown/wait/ready/result), let the server handle cleanup via
+      // its disconnect timeout. This prevents rapid join/leave cycles on
+      // remount from burning through credits.
+      if (statusRef.current === 'waiting') {
+        wsService.leaveRoom();
+      }
       wsService.disconnect();
     };
   }, []);

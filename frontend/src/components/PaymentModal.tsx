@@ -35,6 +35,7 @@ const PaymentModal = ({ visible, onClose, onSuccess, pubkey }: PaymentModalProps
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollStartRef = useRef<number>(0);
+  const fetchInFlightRef = useRef(false);
 
   const stopPolling = () => {
     if (pollRef.current) {
@@ -80,6 +81,7 @@ const PaymentModal = ({ visible, onClose, onSuccess, pubkey }: PaymentModalProps
   useEffect(() => {
     if (!visible) {
       stopPolling();
+      fetchInFlightRef.current = false;
       setInvoice(null);
       setPaymentHash(null);
       setRoomId(null);
@@ -101,6 +103,8 @@ const PaymentModal = ({ visible, onClose, onSuccess, pubkey }: PaymentModalProps
   useEffect(() => () => stopPolling(), []);
 
   const fetchInvoice = async () => {
+    if (fetchInFlightRef.current) return;
+    fetchInFlightRef.current = true;
     try {
       stopPolling();
       setStatus('loading');
@@ -145,6 +149,8 @@ const PaymentModal = ({ visible, onClose, onSuccess, pubkey }: PaymentModalProps
       const isTimeout = e?.name === 'AbortError' || String(e).includes('Aborted');
       setError(isTimeout ? 'Request timed out — LNbits may be slow. Please try again.' : (e?.message ?? String(e)));
       setStatus('error');
+    } finally {
+      fetchInFlightRef.current = false;
     }
   };
 
