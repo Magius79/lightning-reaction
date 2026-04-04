@@ -1,5 +1,4 @@
 import { Socket } from 'socket.io';
-import { schnorr, etc } from '@noble/secp256k1';
 
 const AUTH_WINDOW_MS = 60_000; // Signature valid for 60 seconds
 
@@ -48,6 +47,7 @@ export async function authMiddleware(socket: Socket, next: (err?: Error) => void
   const msgBytes = new TextEncoder().encode(message);
 
   try {
+    const { schnorr, etc } = await import('@noble/secp256k1');
     const valid = await schnorr.verifyAsync(etc.hexToBytes(sig), msgBytes, etc.hexToBytes(pubkey));
     if (!valid) {
       return next(new Error('Invalid signature: verification failed'));
