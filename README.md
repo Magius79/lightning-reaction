@@ -4,22 +4,41 @@ A fast-paced reaction time game for Android where players compete head-to-head f
 
 ## How It Works
 
-Players pay a 100 sat entry fee to join a room. When the room fills (2+ players), a countdown begins. The screen shows "WAIT..." then suddenly turns green — the first player to tap wins the pot minus a small house fee. Rounds take 10–30 seconds. Pure skill, no luck.
+1. Pay **100 sats** to enter a room
+2. Wait for an opponent (or a bot joins after 30 seconds)
+3. Screen shows **"WAIT..."** then turns **GREEN**
+4. First player to tap wins **180 sats** (90% of the pool)
+5. Pure skill, no luck
+
+Freeplay mode available for practice — no sats required.
+
+## Features
+
+- **Head-to-head reaction time battles** with real Bitcoin stakes
+- **Freeplay mode** — practice against a bot for free
+- **Global leaderboard** ranked by wins and reaction time
+- **Nostr identity** — your pubkey is your player ID, profile pulled from relays
+- **Anti-cheat** — 150ms reaction time floor, variance detection, IP limiting
+- **Bot matches** — transparent notification when matched against a bot, with cancel/refund option
+- **Instant payouts** via Lightning Network (LNbits)
 
 ## Stack
 
-- **Frontend:** React Native (Expo) — Android APK distributed via Zapstore
-- **Backend:** Node.js / Express — hosted on Railway
-- **Game Engine:** Socket.io WebSocket server — real-time room management and gameplay
-- **Payments:** LNbits (self-hosted on Start9) for Lightning invoices and payouts
-- **Identity:** Nostr keypairs for player identity
+| Layer | Technology |
+|---|---|
+| Frontend | React Native (Expo) — Android APK via Zapstore |
+| Backend | Node.js / Express — hosted on Railway |
+| Game Engine | Socket.io WebSocket server — real-time gameplay |
+| Payments | LNbits (self-hosted on Start9) via Lightning Network |
+| Identity | Nostr pubkeys for player identity |
+| Database | SQLite with WAL mode |
 
 ## Project Structure
 
 ```
 lightning-reaction/
-├── frontend/       # React Native (Expo) app
-├── backend/        # Express API server
+├── frontend/       # React Native (Expo) Android app
+├── backend/        # Express REST API server
 ├── websocket/      # Socket.io game engine
 ├── docs/           # Architecture & design docs
 ├── specs/          # Component specifications
@@ -31,7 +50,7 @@ lightning-reaction/
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 20+
 - npm
 - [EAS CLI](https://docs.expo.dev/eas/) (`npm install -g eas-cli`)
 - An LNbits instance with LND funding source
@@ -39,26 +58,35 @@ lightning-reaction/
 ### Local Development
 
 ```bash
-# Start all three services (requires tmux)
-./START.sh
-
-# Or run manually in separate terminals:
-cd backend && npm run dev
-cd websocket && npm run dev
-cd frontend && npx expo start
+# Run each service in a separate terminal:
+cd backend && npm install && npm run dev      # Express on :4000
+cd websocket && npm install && npm run dev    # Socket.io on :3001
+cd frontend && npm install && npx expo start  # Expo dev server
 ```
 
 ### Environment Variables
 
-The backend requires the following environment variables:
+**Backend** (`.env`):
 
 | Variable | Description |
 |---|---|
 | `LNBITS_URL` | URL to your LNbits instance |
 | `LNBITS_INVOICE_KEY` | LNbits invoice/read key |
 | `LNBITS_ADMIN_KEY` | LNbits admin key (for payouts) |
-| `DATABASE_URL` | SQLite database path |
-| `PORT` | Server port (default: 8080) |
+| `JWT_SECRET` | JWT signing secret |
+| `DB_PATH` | SQLite database path |
+| `PORT` | Server port (default: 4000) |
+| `ENTRY_FEE` | Entry fee in sats (default: 100) |
+| `HOUSE_EDGE` | House fee percentage (default: 0.1) |
+
+**WebSocket** (`.env`):
+
+| Variable | Description |
+|---|---|
+| `PORT` | Server port (default: 3001) |
+| `BACKEND_API_URL` | Backend API URL |
+
+**Frontend**: API and WebSocket URLs are configured in `frontend/src/constants/theme.ts`.
 
 ### Building the APK
 
@@ -67,25 +95,46 @@ cd frontend
 eas build --platform android --profile preview
 ```
 
-This produces an `.apk` via Expo's cloud build service.
+### Deploying
 
-### Deploying the Backend
+Backend and WebSocket are hosted on Railway. Auto-deploy from GitHub is disabled — use the Railway CLI:
 
 ```bash
-cd backend
-railway login
-railway up
+cd backend && railway up
+cd websocket && railway up
 ```
-
-See `docs/RAILWAY_DEPLOYMENT.md` for full deployment details including database persistence and custom domains.
 
 ## Distribution
 
 The app is distributed via [Zapstore](https://zapstore.dev), a permissionless Android app store built on Nostr. Releases are signed with a Nostr key and published using [`zsp`](https://github.com/zapstore/zsp):
 
 ```bash
-SIGN_WITH=nsec1... zsp publish -r github.com/Magius79/lightning-reaction -m github
+rm -rf ~/.cache/zsp
+SIGN_WITH=nsec1... zsp publish -r github.com/Magius79/lightning-reaction -m github --overwrite-release
 ```
+
+## Game Architecture
+
+```
+Player joins → Pays Lightning invoice → Enters WebSocket room
+    → Countdown (3-2-1) → Random 2-8s wait → GREEN signal
+    → First tap wins → Winner submits BOLT11 invoice → Payout via LNbits
+```
+
+**Bot behavior:**
+- Paid games: 300-600ms reaction time (competitive)
+- Freeplay: 500-900ms reaction time (easier)
+- Bot joins after 30s if no opponent (paid) or immediately (freeplay)
+- Players are notified 10 seconds before bot joins with option to cancel
+
+## Security
+
+- 150ms minimum reaction time (sub-human speeds rejected)
+- Reaction time variance analysis (detects scripted clients)
+- IP-based connection limiting
+- Payment hash consumption (prevents replay attacks)
+- Server-side reaction time computation (client timestamps can't be spoofed)
+- Payout retry with exponential backoff for transient failures
 
 ## License
 
