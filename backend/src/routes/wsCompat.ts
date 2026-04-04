@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { parseBody } from '../utils/validation';
 import { checkInvoice, payInvoice } from '../services/lightning';
-import { getByHash, confirmByHash } from '../services/transactions';
+import { getByHash, confirmByHash, isPaymentHashUsed, markPaymentHashUsed } from '../services/transactions';
 import { markRoomPlayerPaidByHash } from '../services/rooms';
 import { logger } from '../config/logger';
 
@@ -14,6 +14,12 @@ wsCompatRouter.post('/verify-payment', async (req, res, next) => {
   try {
     const body = parseBody(z.object({ pubkey: z.string().min(16), paymentHash: z.string().min(10) }), req.body);
 
+    // Reject payment hashes that have already been used for a room join
+    if (isPaymentHashUsed(body.paymentHash)) {
+      logger.warn({ paymentHash: body.paymentHash, pubkey: body.pubkey }, 'verify-payment: hash already used');
+      return res.json({ verified: false, reason: 'Payment hash already used' });
+    }
+
     const tx = getByHash('entry', body.paymentHash);
     if (!tx) return res.json({ verified: false });
     if (tx.pubkey && tx.pubkey !== body.pubkey) return res.json({ verified: false });
@@ -21,8 +27,9 @@ wsCompatRouter.post('/verify-payment', async (req, res, next) => {
     const { paid } = await checkInvoice(body.paymentHash);
     if (!paid) return res.json({ verified: false });
 
-    // Mark confirmed (idempotent)
+    // Mark confirmed and consume the hash so it cannot be replayed
     confirmByHash('entry', body.paymentHash);
+    markPaymentHashUsed(body.paymentHash, body.pubkey);
     markRoomPlayerPaidByHash(body.paymentHash);
 
     res.json({ verified: true });

@@ -129,6 +129,10 @@ export async function payInvoice(bolt11: string, amountSats?: number): Promise<{
       const text = await res.text();
       if (!res.ok) {
         logger.error({ attempt, status: res.status, body: text }, 'LNbits payInvoice failed');
+        // Don't retry client errors (4xx) — they'll never succeed
+        if (res.status >= 400 && res.status < 500) {
+          throw new HttpError(502, `LNbits rejected payment: ${text}`);
+        }
         throw new Error(text);
       }
       const json = JSON.parse(text) as any;

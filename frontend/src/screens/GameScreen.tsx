@@ -159,6 +159,10 @@ const GameScreen = ({ navigation, route }: any) => {
   const [waitingSeconds, setWaitingSeconds] = useState(0);
   const waitingTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Bot warning countdown (paid rooms only)
+  const [botCountdown, setBotCountdown] = useState<number | null>(null);
+  const botCountdownTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
   // 0: dark, 1: red (wait), 2: green (tap)
   const bgAnim = useRef(new Animated.Value(0)).current;
   const currentRoomId = useRef<string | null>(null);
@@ -181,6 +185,8 @@ const GameScreen = ({ navigation, route }: any) => {
     joinedAt.current = 0;
     setWaitingSeconds(0);
     if (waitingTimer.current) clearInterval(waitingTimer.current);
+    setBotCountdown(null);
+    if (botCountdownTimer.current) clearInterval(botCountdownTimer.current);
     resultScale.setValue(0);
     resultOpacity.setValue(0);
     Animated.timing(bgAnim, {
@@ -267,6 +273,12 @@ const GameScreen = ({ navigation, route }: any) => {
 
     const onGameStart = (data: any) => {
       if (typeof data?.countdown === 'number') setCountdown(data.countdown);
+      // Clear bot warning — game is starting (opponent or bot joined)
+      setBotCountdown(null);
+      if (botCountdownTimer.current) {
+        clearInterval(botCountdownTimer.current);
+        botCountdownTimer.current = null;
+      }
       setStatus('countdown');
       playSound('countdown');
     };
@@ -372,6 +384,38 @@ const GameScreen = ({ navigation, route }: any) => {
       }).start();
     };
 
+    // Bot warning: server says a bot will join in N seconds
+    const onBotWarning = (data: any) => {
+      const seconds = data?.countdownSeconds ?? 10;
+      setBotCountdown(seconds);
+      // Tick down every second
+      if (botCountdownTimer.current) clearInterval(botCountdownTimer.current);
+      let remaining = seconds;
+      botCountdownTimer.current = setInterval(() => {
+        remaining--;
+        if (remaining <= 0) {
+          clearInterval(botCountdownTimer.current!);
+          botCountdownTimer.current = null;
+          setBotCountdown(null);
+        } else {
+          setBotCountdown(remaining);
+        }
+      }, 1000);
+    };
+
+    const onWaitingCancelled = (data: any) => {
+      setBotCountdown(null);
+      if (botCountdownTimer.current) {
+        clearInterval(botCountdownTimer.current);
+        botCountdownTimer.current = null;
+      }
+      Alert.alert(
+        'Refunded',
+        data?.message || 'Your credit is ready for your next game.',
+        [{ text: 'OK', onPress: () => navigation.goBack() }]
+      );
+    };
+
     // Make server rejections visible (RoomManager uses socket.emit('error', ...))
     const onWsError = (data: any) => {
       const msg = data?.message || '';
@@ -397,6 +441,8 @@ const GameScreen = ({ navigation, route }: any) => {
     wsService.on('payoutExpired', onPayoutExpired);
     wsService.on('roomTimeout', onRoomTimeout);
     wsService.on('disqualified', onDisqualified);
+    wsService.on('botWarning', onBotWarning);
+    wsService.on('waitingCancelled', onWaitingCancelled);
     wsService.on('error', onWsError);
 
     // On socket reconnect, rejoin room if in active game, or check timeout
@@ -442,8 +488,12 @@ const GameScreen = ({ navigation, route }: any) => {
       wsService.off('payoutExpired');
       wsService.off('roomTimeout');
       wsService.off('disqualified');
+      wsService.off('botWarning');
+      wsService.off('waitingCancelled');
       wsService.off('error');
       wsService.off('connect');
+
+      if (botCountdownTimer.current) clearInterval(botCountdownTimer.current);
 
       wsService.leaveRoom();
       wsService.disconnect();
@@ -537,6 +587,20 @@ const GameScreen = ({ navigation, route }: any) => {
               <Text style={styles.timerText}>
                 {minutes}:{seconds.toString().padStart(2, '0')}
               </Text>
+
+              {botCountdown !== null && !freeplay && (
+                <View style={styles.botWarningContainer}>
+                  <Text style={styles.botWarningText}>
+                    Bot joining in {botCountdown}s...
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.cancelButton}
+                    onPress={() => wsService.cancelWaiting()}
+                  >
+                    <Text style={styles.cancelButtonText}>Cancel & Refund</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
             </View>
           )}
 
@@ -700,6 +764,33 @@ const styles = StyleSheet.create({
     height: 12,
     borderRadius: 6,
     backgroundColor: COLORS.primary,
+  },
+  botWarningContainer: {
+    marginTop: 20,
+    alignItems: 'center',
+    backgroundColor: 'rgba(247, 147, 26, 0.15)',
+    borderRadius: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+  },
+  botWarningText: {
+    color: COLORS.primary,
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 12,
+  },
+  cancelButton: {
+    backgroundColor: COLORS.danger,
+    paddingVertical: 12,
+    paddingHorizontal: 28,
+    borderRadius: 10,
+  },
+  cancelButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
   timerText: {
     color: COLORS.textSecondary,

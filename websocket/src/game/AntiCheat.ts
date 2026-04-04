@@ -9,12 +9,30 @@ export class AntiCheat {
   private readonly MAX_CONNECTIONS_PER_IP = 2;
 
   // Track recent reaction times per pubkey for variance analysis
-  private reactionHistory: Map<string, number[]> = new Map();
+  private reactionHistory: Map<string, { times: number[]; lastSeen: number }> = new Map();
   private readonly HISTORY_SIZE = 10;
   private readonly MIN_VARIANCE_THRESHOLD = 15; // ms — suspiciously consistent
+  private readonly HISTORY_TTL_MS = 60 * 60 * 1000; // Evict after 1 hour of inactivity
 
   constructor() {
     this.connectionCountByIp = new Map();
+
+    // Periodically evict stale reactionHistory entries to prevent unbounded growth
+    setInterval(() => this.evictStaleHistory(), 10 * 60 * 1000); // Every 10 min
+  }
+
+  private evictStaleHistory() {
+    const now = Date.now();
+    let evicted = 0;
+    for (const [pubkey, entry] of this.reactionHistory) {
+      if (now - entry.lastSeen > this.HISTORY_TTL_MS) {
+        this.reactionHistory.delete(pubkey);
+        evicted++;
+      }
+    }
+    if (evicted > 0) {
+      console.log(`[AntiCheat] Evicted ${evicted} stale reactionHistory entries`);
+    }
   }
 
   /**
@@ -38,14 +56,15 @@ export class AntiCheat {
   }
 
   private recordReaction(pubkey: string, reactionTime: number) {
-    let history = this.reactionHistory.get(pubkey);
-    if (!history) {
-      history = [];
-      this.reactionHistory.set(pubkey, history);
+    let entry = this.reactionHistory.get(pubkey);
+    if (!entry) {
+      entry = { times: [], lastSeen: Date.now() };
+      this.reactionHistory.set(pubkey, entry);
     }
-    history.push(reactionTime);
-    if (history.length > this.HISTORY_SIZE) {
-      history.shift();
+    entry.lastSeen = Date.now();
+    entry.times.push(reactionTime);
+    if (entry.times.length > this.HISTORY_SIZE) {
+      entry.times.shift();
     }
   }
 
@@ -54,14 +73,25 @@ export class AntiCheat {
    * low standard deviation (< 15ms over 5+ games), which suggests automation.
    */
   hasLowVariance(pubkey: string): boolean {
-    const history = this.reactionHistory.get(pubkey);
-    if (!history || history.length < 5) return false;
+    const entry = this.reactionHistory.get(pubkey);
+    if (!entry || entry.times.length < 5) return false;
 
-    const mean = history.reduce((a, b) => a + b, 0) / history.length;
-    const variance = history.reduce((sum, t) => sum + (t - mean) ** 2, 0) / history.length;
+    const times = entry.times;
+    const mean = times.reduce((a, b) => a + b, 0) / times.length;
+    const variance = times.reduce((sum, t) => sum + (t - mean) ** 2, 0) / times.length;
     const stdDev = Math.sqrt(variance);
 
     return stdDev < this.MIN_VARIANCE_THRESHOLD;
+  }
+
+  /**
+   * Get a player's rolling average reaction time from recent history.
+   * Returns null if fewer than 3 data points (not enough to be meaningful).
+   */
+  getPlayerAvgReaction(pubkey: string): number | null {
+    const entry = this.reactionHistory.get(pubkey);
+    if (!entry || entry.times.length < 3) return null;
+    return entry.times.reduce((a, b) => a + b, 0) / entry.times.length;
   }
 
   checkMultipleConnections(ip: string): boolean {

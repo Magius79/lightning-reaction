@@ -1,14 +1,18 @@
 import { io, Socket } from 'socket.io-client';
 import { WS_URL } from '../constants/theme';
+import { signAuthChallenge } from './auth';
 
 class WebSocketService {
   private socket: Socket | null = null;
 
-  connect() {
+  async connect() {
+    const auth = await signAuthChallenge();
+
     this.socket = io(WS_URL, {
       reconnection: true,
       // Let socket.io choose best transport; forcing websocket-only can fail on some networks.
       transports: ['polling', 'websocket'],
+      auth: auth ?? undefined,
     });
 
     this.socket.on('connect', () => console.log('WS connected', this.socket?.id));
@@ -32,6 +36,10 @@ class WebSocketService {
 
   leaveRoom() {
     this.socket?.emit('leaveRoom');
+  }
+
+  cancelWaiting() {
+    this.socket?.emit('cancelWaiting');
   }
 
   rejoinRoom(pubkey: string, roomId: string) {

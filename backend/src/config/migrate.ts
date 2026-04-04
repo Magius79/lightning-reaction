@@ -75,6 +75,16 @@ CREATE INDEX IF NOT EXISTS idx_transactions_hash ON transactions(payment_hash);
 CREATE INDEX IF NOT EXISTS idx_room_players_room ON room_players(room_id);
 CREATE INDEX IF NOT EXISTS idx_players_winnings ON players(total_winnings DESC);
 `
+  },
+  {
+    id: '002_used_payment_hashes',
+    sql: `
+CREATE TABLE IF NOT EXISTS used_payment_hashes (
+  payment_hash TEXT PRIMARY KEY,
+  pubkey TEXT NOT NULL,
+  used_at INTEGER NOT NULL
+);
+`
   }
 ];
 

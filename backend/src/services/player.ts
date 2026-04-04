@@ -110,11 +110,12 @@ export function updatePlayerStats(pubkey: string, won: boolean, reactionTime: nu
         games_won = games_won + 1,
         total_winnings = total_winnings + ?,
         avg_reaction_time = CASE
+          WHEN ? IS NULL THEN avg_reaction_time
           WHEN avg_reaction_time IS NULL THEN ?
           ELSE (avg_reaction_time * games_played + ?) / (games_played + 1)
         END
       WHERE pubkey = ?`
-    ).run(satsWon, reactionTime, reactionTime, pubkey);
+    ).run(satsWon, reactionTime, reactionTime, reactionTime, pubkey);
   } else {
     db.prepare(
       `UPDATE players SET

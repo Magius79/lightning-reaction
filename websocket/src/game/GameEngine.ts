@@ -7,13 +7,25 @@ export class GameEngine {
   private io: Server;
   private rooms: Map<string, Room>;
   private antiCheat: AntiCheat;
+  private onPayoutRequested?: (roomId: string) => void;
+  private onSafetyCleanup?: (roomId: string) => void;
   private readonly BACKEND_API = process.env.BACKEND_API_URL || 'http://localhost:4000';
   // Note: backend API calls (verify-payment, payout, refund) are handled by RoomManager.
 
-  constructor(io: Server, rooms: Map<string, Room>) {
+  constructor(io: Server, rooms: Map<string, Room>, antiCheat: AntiCheat) {
     this.io = io;
     this.rooms = rooms;
-    this.antiCheat = new AntiCheat();
+    this.antiCheat = antiCheat;
+  }
+
+  /** Register a callback fired when a payout is requested (used to start payout timeout). */
+  setPayoutRequestedCallback(cb: (roomId: string) => void) {
+    this.onPayoutRequested = cb;
+  }
+
+  /** Register a callback for the 15-min safety cleanup (used to clean socketRooms/timers). */
+  setSafetyCleanupCallback(cb: (roomId: string) => void) {
+    this.onSafetyCleanup = cb;
   }
 
   startGame(roomId: string) {
@@ -76,12 +88,12 @@ export class GameEngine {
       if (isBot(socketId) && !player.disqualified) {
         const botDelay = room.isFreeplay
           ? Math.floor(Math.random() * 400) + 500   // 500-900ms freeplay
-          : Math.floor(Math.random() * 300) + 300;  // 300-600ms paid
+          : this.calcAdaptiveBotDelay(room);
         setTimeout(() => {
           if (room.status !== 'green') return; // game already ended
           const tapTime = Date.now();
           room.recordTap(socketId, tapTime);
-          console.log(`[GameEngine] Bot tapped in room ${roomId} with ${tapTime - (room.greenTimestamp ?? 0)}ms reaction time`);
+          console.log(`[GameEngine] Bot tapped in room ${roomId} with ${tapTime - (room.greenTimestamp ?? 0)}ms reaction time (target delay ${botDelay}ms)`);
           // Only end game if no human has tapped yet (first tap wins)
           if (room.status === 'green') {
             this.endGame(roomId, socketId);
@@ -89,6 +101,41 @@ export class GameEngine {
         }, botDelay);
       }
     }
+  }
+
+  /**
+   * Calculate adaptive bot delay for paid games based on the human opponent's
+   * rolling average reaction time.
+   *
+   * Formula: floor = max(playerAvg - 40, 180), range = 150ms
+   * Bot reacts in [floor, floor + 150] ms.
+   * Falls back to 300-450ms if no player history available.
+   */
+  private calcAdaptiveBotDelay(room: Room): number {
+    // Find the human opponent's pubkey
+    let humanPubkey: string | null = null;
+    for (const [sid, p] of room.players) {
+      if (!isBot(sid)) {
+        humanPubkey = p.pubkey;
+        break;
+      }
+    }
+
+    const BOT_RANGE = 150;
+    const HARD_MIN = 180;
+
+    if (humanPubkey) {
+      const playerAvg = this.antiCheat.getPlayerAvgReaction(humanPubkey);
+      if (playerAvg !== null) {
+        const floor = Math.max(Math.round(playerAvg - 40), HARD_MIN);
+        const delay = floor + Math.floor(Math.random() * BOT_RANGE);
+        console.log(`[GameEngine] Adaptive bot: playerAvg=${Math.round(playerAvg)}ms → bot range [${floor}, ${floor + BOT_RANGE}]ms → delay=${delay}ms`);
+        return delay;
+      }
+    }
+
+    // Fallback: no history yet, use moderate difficulty
+    return Math.floor(Math.random() * BOT_RANGE) + 300;
   }
 
   handleTap(roomId: string, socketId: string, clientTimestamp: number) {
@@ -112,6 +159,9 @@ export class GameEngine {
     const serverTimestamp = Date.now();
     const player = room.players.get(socketId);
     if (!player || player.disqualified) return;
+
+    // Reject duplicate taps — a player can only tap once per game
+    if (player.tapTime !== null) return;
 
     if (room.greenTimestamp) {
       const reactionTime = serverTimestamp - room.greenTimestamp;
@@ -172,21 +222,27 @@ export class GameEngine {
 
     // Update player stats in the backend (skip bot and freeplay)
     if (!room.isFreeplay) {
-      try {
-        const statsPayload = Array.from(room.players.values())
-          .filter((player) => player.pubkey !== BOT_PUBKEY)
-          .map((player) => ({
-            pubkey: player.pubkey,
-            won: player.pubkey === winner?.pubkey,
-            reactionTime: player.reactionTime ?? null,
-            satsWon: player.pubkey === winner?.pubkey ? room.prizePool : 0,
-          }));
-        if (statsPayload.length > 0) {
-          await axios.post(`${this.BACKEND_API}/api/rooms/update-stats`, { players: statsPayload });
-          console.log(`[GameEngine] Updated stats for ${statsPayload.length} players in room ${roomId}`);
+      const statsPayload = Array.from(room.players.values())
+        .filter((player) => player.pubkey !== BOT_PUBKEY)
+        .map((player) => ({
+          pubkey: player.pubkey,
+          won: player.pubkey === winner?.pubkey,
+          reactionTime: player.reactionTime ?? null,
+          satsWon: player.pubkey === winner?.pubkey ? room.prizePool : 0,
+        }));
+      if (statsPayload.length > 0) {
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            await axios.post(`${this.BACKEND_API}/api/rooms/update-stats`, { players: statsPayload });
+            console.log(`[GameEngine] Updated stats for ${statsPayload.length} players in room ${roomId}`);
+            break;
+          } catch (e: any) {
+            console.error(`[GameEngine] Stats update attempt ${attempt}/3 failed for room ${roomId}:`, e?.message);
+            if (attempt < 3) {
+              await new Promise(r => setTimeout(r, 1000 * attempt));
+            }
+          }
         }
-      } catch (e: any) {
-        console.error('[GameEngine] Failed to update stats:', e?.message);
       }
     }
 
@@ -199,6 +255,7 @@ export class GameEngine {
         `Requesting payout invoice from winner (socket ${winnerSocketId}) for ${amountSats} sats (pool=${room.prizePool}) in room ${roomId}`
       );
       this.io.to(winnerSocketId).emit('payoutRequested', { roomId, amountSats });
+      this.onPayoutRequested?.(roomId);
     } else if (botWon) {
       console.log(`[GameEngine] Bot won room ${roomId} — no payout, ${room.prizePool} sats stay in house`);
     } else if (room.isFreeplay) {
@@ -211,7 +268,11 @@ export class GameEngine {
     setTimeout(() => {
       if (this.rooms.has(roomId)) {
         console.log(`[GameEngine] Safety cleanup: deleting stale room ${roomId}`);
-        this.rooms.delete(roomId);
+        this.onSafetyCleanup?.(roomId);
+        // Fallback if no callback registered
+        if (!this.onSafetyCleanup) {
+          this.rooms.delete(roomId);
+        }
       }
     }, 15 * 60 * 1000);
   }

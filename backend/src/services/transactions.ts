@@ -36,3 +36,19 @@ export function getByHash(type: TransactionType, paymentHash: string) {
     .prepare('SELECT * FROM transactions WHERE type = ? AND payment_hash = ?')
     .get(type, paymentHash) as any | undefined;
 }
+
+export function isPaymentHashUsed(paymentHash: string): boolean {
+  const db = getDb();
+  const row = db
+    .prepare('SELECT 1 FROM used_payment_hashes WHERE payment_hash = ?')
+    .get(paymentHash);
+  return !!row;
+}
+
+export function markPaymentHashUsed(paymentHash: string, pubkey: string) {
+  const db = getDb();
+  db.prepare(
+    `INSERT OR IGNORE INTO used_payment_hashes (payment_hash, pubkey, used_at)
+     VALUES (?, ?, ?)`
+  ).run(paymentHash, pubkey, Date.now());
+}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   StyleSheet,
   Text,
@@ -13,14 +13,31 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS } from '../constants/theme';
 import { Zap } from 'lucide-react-native';
+import { generateKeypair, saveKeypair, loadKeypair, pubkeyFromNsec } from '../services/auth';
 
 const LoginScreen = ({ navigation }: any) => {
   const [pubkey, setPubkey] = useState('');
   const [lightningAddress, setLightningAddress] = useState('');
+  const [showImport, setShowImport] = useState(false);
+  const [nsecInput, setNsecInput] = useState('');
+
+  // Auto-generate a keypair on mount if none exists
+  useEffect(() => {
+    (async () => {
+      const existing = await loadKeypair();
+      if (existing) {
+        setPubkey(existing.pubkey);
+      } else {
+        const kp = generateKeypair();
+        await saveKeypair(kp.nsec, kp.pubkey);
+        setPubkey(kp.pubkey);
+      }
+    })();
+  }, []);
 
   const handleLogin = async () => {
     if (pubkey.length < 10) {
-      Alert.alert('Invalid Pubkey', 'Please enter a valid Nostr pubkey.');
+      Alert.alert('Error', 'Keypair not generated. Please restart the app.');
       return;
     }
 
@@ -34,7 +51,6 @@ const LoginScreen = ({ navigation }: any) => {
     }
 
     try {
-      await AsyncStorage.setItem('user_pubkey', pubkey.trim());
       await AsyncStorage.setItem('lightning_address', lightningAddress.trim());
       navigation.replace('Home');
     } catch (e) {
@@ -42,11 +58,22 @@ const LoginScreen = ({ navigation }: any) => {
     }
   };
 
-  const handleNostrLogin = () => {
-    Alert.alert(
-      'Nostr extension',
-      'NIP-07 not available in mobile context. Please paste your pubkey for now.'
-    );
+  const handleImportNsec = async () => {
+    const hex = nsecInput.trim();
+    if (!/^[0-9a-f]{64}$/i.test(hex)) {
+      Alert.alert('Invalid Key', 'Enter a 64-character hex private key.');
+      return;
+    }
+    try {
+      const derived = pubkeyFromNsec(hex);
+      await saveKeypair(hex, derived);
+      setPubkey(derived);
+      setShowImport(false);
+      setNsecInput('');
+      Alert.alert('Imported', `Pubkey: ${derived.slice(0, 12)}...`);
+    } catch {
+      Alert.alert('Invalid Key', 'Could not derive a public key from this private key.');
+    }
   };
 
   return (
@@ -66,16 +93,12 @@ const LoginScreen = ({ navigation }: any) => {
         </View>
 
         <View style={styles.form}>
-          <Text style={styles.label}>Nostr Public Key (npub or hex)</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="npub1..."
-            placeholderTextColor="#666"
-            value={pubkey}
-            onChangeText={setPubkey}
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
+          <Text style={styles.label}>Your Game Identity (pubkey)</Text>
+          <View style={styles.pubkeyDisplay}>
+            <Text style={styles.pubkeyText} selectable>
+              {pubkey ? `${pubkey.slice(0, 16)}...${pubkey.slice(-8)}` : 'Generating...'}
+            </Text>
+          </View>
 
           <Text style={styles.label}>
             Lightning Address{' '}
@@ -100,9 +123,28 @@ const LoginScreen = ({ navigation }: any) => {
             <Text style={styles.loginButtonText}>Enter Arena</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.nostrButton} onPress={handleNostrLogin}>
-            <Text style={styles.nostrButtonText}>Connect with Nostr</Text>
+          <TouchableOpacity style={styles.nostrButton} onPress={() => setShowImport(!showImport)}>
+            <Text style={styles.nostrButtonText}>Import Existing Key</Text>
           </TouchableOpacity>
+
+          {showImport && (
+            <View style={styles.importContainer}>
+              <Text style={styles.label}>Private Key (64-char hex)</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="hex private key..."
+                placeholderTextColor="#666"
+                value={nsecInput}
+                onChangeText={setNsecInput}
+                autoCapitalize="none"
+                autoCorrect={false}
+                secureTextEntry
+              />
+              <TouchableOpacity style={styles.importButton} onPress={handleImportNsec}>
+                <Text style={styles.loginButtonText}>Import</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -188,6 +230,28 @@ const styles = StyleSheet.create({
     color: COLORS.primary,
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  pubkeyDisplay: {
+    backgroundColor: COLORS.card,
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#444',
+    marginBottom: 12,
+  },
+  pubkeyText: {
+    color: COLORS.textSecondary,
+    fontSize: 14,
+    fontFamily: 'monospace',
+  },
+  importContainer: {
+    marginTop: 15,
+  },
+  importButton: {
+    backgroundColor: COLORS.primary,
+    borderRadius: 12,
+    padding: 14,
+    alignItems: 'center',
   },
 });
 

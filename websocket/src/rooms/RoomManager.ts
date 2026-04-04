@@ -3,34 +3,74 @@ import axios from 'axios';
 import { Room, isBot, BOT_PUBKEY } from './Room';
 import { Matchmaker } from './Matchmaker';
 import { GameEngine } from '../game/GameEngine';
+import { AntiCheat } from '../game/AntiCheat';
 
 export class RoomManager {
   private io: Server;
   private rooms: Map<string, Room>;
   private matchmaker: Matchmaker;
   private gameEngine: GameEngine;
+  private antiCheat: AntiCheat;
   private readonly MAX_PLAYERS_PER_ROOM = 10;
   private readonly BACKEND_API = process.env.BACKEND_API_URL || 'http://localhost:4000';
   private readonly ROOM_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
   private readonly PAYOUT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes to claim winnings
-  private readonly BOT_JOIN_DELAY_MS = 30 * 1000; // 30 seconds before bot joins
+  private readonly BOT_WARNING_DELAY_MS = 20 * 1000; // 20s before warning
+  private readonly BOT_JOIN_AFTER_WARNING_MS = 10 * 1000; // 10s after warning, bot joins
 
   // roomId -> winnerPubkey -> resolved
   private payoutInFlight: Set<string> = new Set();
   private roomTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private payoutTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
-  private botTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private botWarningTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private botJoinTimeouts: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private socketRooms: Map<string, string> = new Map(); // socketId -> roomId
 
   constructor(io: Server) {
     this.io = io;
     this.rooms = new Map();
+    this.antiCheat = new AntiCheat();
     this.matchmaker = new Matchmaker(this.rooms, this.MAX_PLAYERS_PER_ROOM);
-    this.gameEngine = new GameEngine(io, this.rooms);
+    this.gameEngine = new GameEngine(io, this.rooms, this.antiCheat);
+    this.gameEngine.setPayoutRequestedCallback((roomId) => this.startPayoutTimeout(roomId));
+    this.gameEngine.setSafetyCleanupCallback((roomId) => this.handleSafetyCleanup(roomId));
+  }
+
+  /** Clean up all resources for a stale room (called by GameEngine 15-min safety timeout). */
+  private handleSafetyCleanup(roomId: string) {
+    console.log(`[RoomManager] Safety cleanup for room ${roomId}`);
+
+    // Clean up socketRooms entries
+    for (const [sid, rid] of this.socketRooms) {
+      if (rid === roomId) {
+        const sock = this.io.sockets.sockets.get(sid);
+        if (sock) sock.leave(roomId);
+        this.socketRooms.delete(sid);
+      }
+    }
+
+    // Clear any lingering timers
+    this.clearRoomTimeout(roomId);
+    this.clearBotTimeout(roomId);
+    this.clearPayoutTimeout(roomId);
+
+    // Delete the room
+    this.rooms.delete(roomId);
+  }
+
+  /** Check if an IP has too many connections. Returns true if blocked. */
+  checkConnection(ip: string): boolean {
+    return this.antiCheat.checkMultipleConnections(ip);
+  }
+
+  /** Release a connection slot for the given IP. */
+  releaseConnection(ip: string) {
+    this.antiCheat.removeConnection(ip);
   }
 
   async handleJoinRoom(socket: Socket, data: { pubkey: string; paymentHash: string }) {
-    const pubkey = data?.pubkey;
+    // Use the cryptographically verified pubkey from auth handshake
+    const pubkey: string = socket.data.pubkey || data?.pubkey;
     const paymentHash = data?.paymentHash;
 
     if (!pubkey || !paymentHash) {
@@ -119,7 +159,8 @@ export class RoomManager {
   }
 
   handleJoinFreeplay(socket: Socket, data: { pubkey: string }) {
-    const pubkey = data?.pubkey;
+    // Use the cryptographically verified pubkey from auth handshake
+    const pubkey: string = socket.data.pubkey || data?.pubkey;
     if (!pubkey) {
       socket.emit('error', { message: 'Missing pubkey' });
       return;
@@ -157,7 +198,9 @@ export class RoomManager {
   }
 
   handleRejoinRoom(socket: Socket, data: { pubkey: string; roomId: string }) {
-    const { pubkey, roomId } = data || ({} as any);
+    // Use the cryptographically verified pubkey from auth handshake
+    const pubkey: string = socket.data.pubkey || data?.pubkey;
+    const roomId = data?.roomId;
     if (!pubkey || !roomId) return;
 
     const room = this.rooms.get(roomId);
@@ -234,7 +277,10 @@ export class RoomManager {
       bolt11Len: data?.bolt11?.length,
     });
 
-    const { roomId, bolt11, pubkey } = data || ({} as any);
+    const roomId = data?.roomId;
+    const bolt11 = data?.bolt11;
+    // Use the cryptographically verified pubkey from auth handshake
+    const pubkey: string = socket.data.pubkey || data?.pubkey;
 
     if (!roomId || !bolt11 || !pubkey) {
       socket.emit('error', { message: 'Missing roomId, bolt11, or pubkey' });
@@ -299,7 +345,8 @@ export class RoomManager {
       socket.emit('payoutSent', { roomId, paymentHash: resp.data?.paymentHash });
       console.log(`Payout successful for room ${roomId}: paymentHash=${resp.data?.paymentHash}`);
     } catch (e: any) {
-      room.payoutStatus = 'failed';
+      // Reset to 'requested' so the player can retry with a different invoice
+      room.payoutStatus = 'requested';
 
       // Better error message propagation (shows backend {error} if present)
       let msg = e?.message || 'Unknown error';
@@ -311,7 +358,7 @@ export class RoomManager {
         if (status) msg = `${msg} (HTTP ${status})`;
       }
 
-      socket.emit('payoutFailed', { roomId, error: msg });
+      socket.emit('payoutFailed', { roomId, error: msg, retryable: true });
       console.error('Payout submit error:', msg, e?.response?.data || e);
     } finally {
       this.payoutInFlight.delete(key);
@@ -431,25 +478,55 @@ export class RoomManager {
     this.rooms.delete(roomId);
   }
 
-  // ── Bot auto-join (30s) ──
+  // ── Bot auto-join: 20s warning → 10s countdown → bot joins ──
 
   private startBotTimeout(roomId: string) {
-    if (this.botTimeouts.has(roomId)) return;
-    const timer = setTimeout(() => this.handleBotJoin(roomId), this.BOT_JOIN_DELAY_MS);
-    this.botTimeouts.set(roomId, timer);
-    console.log(`[RoomManager] Started ${this.BOT_JOIN_DELAY_MS / 1000}s bot timer for room ${roomId}`);
+    if (this.botWarningTimeouts.has(roomId)) return;
+    const room = this.rooms.get(roomId);
+
+    // Freeplay rooms get the bot immediately (handled elsewhere), skip warning
+    if (room?.isFreeplay) return;
+
+    const timer = setTimeout(() => this.handleBotWarning(roomId), this.BOT_WARNING_DELAY_MS);
+    this.botWarningTimeouts.set(roomId, timer);
+    console.log(`[RoomManager] Started ${this.BOT_WARNING_DELAY_MS / 1000}s bot warning timer for room ${roomId}`);
   }
 
   private clearBotTimeout(roomId: string) {
-    const timer = this.botTimeouts.get(roomId);
-    if (timer) {
-      clearTimeout(timer);
-      this.botTimeouts.delete(roomId);
+    const warnTimer = this.botWarningTimeouts.get(roomId);
+    if (warnTimer) {
+      clearTimeout(warnTimer);
+      this.botWarningTimeouts.delete(roomId);
+    }
+    const joinTimer = this.botJoinTimeouts.get(roomId);
+    if (joinTimer) {
+      clearTimeout(joinTimer);
+      this.botJoinTimeouts.delete(roomId);
     }
   }
 
+  private handleBotWarning(roomId: string) {
+    this.botWarningTimeouts.delete(roomId);
+    const room = this.rooms.get(roomId);
+    if (!room || room.status !== 'waiting' || room.getPlayerCount() < 1) return;
+    if (room.getPlayerCount() >= 2) return;
+
+    // Notify the player that a bot will join in 10 seconds
+    this.io.to(roomId).emit('botWarning', {
+      roomId,
+      countdownSeconds: this.BOT_JOIN_AFTER_WARNING_MS / 1000,
+      message: 'No opponents found. A bot will join in 10 seconds.',
+    });
+
+    console.log(`[RoomManager] Bot warning sent for room ${roomId} — bot joins in ${this.BOT_JOIN_AFTER_WARNING_MS / 1000}s`);
+
+    // Schedule the actual bot join
+    const timer = setTimeout(() => this.handleBotJoin(roomId), this.BOT_JOIN_AFTER_WARNING_MS);
+    this.botJoinTimeouts.set(roomId, timer);
+  }
+
   private handleBotJoin(roomId: string) {
-    this.botTimeouts.delete(roomId);
+    this.botJoinTimeouts.delete(roomId);
     const room = this.rooms.get(roomId);
     if (!room || room.status !== 'waiting' || room.getPlayerCount() < 1) return;
 
@@ -457,7 +534,7 @@ export class RoomManager {
     if (room.getPlayerCount() >= 2) return;
 
     const botSocketId = room.addBotPlayer(roomId);
-    console.log(`[RoomManager] ⚡ Bot joined room ${roomId} (socketId=${botSocketId})`);
+    console.log(`[RoomManager] Bot joined room ${roomId} (socketId=${botSocketId})`);
 
     // Notify the real player that the bot joined
     this.io.to(roomId).emit('roomUpdated', {
@@ -470,6 +547,67 @@ export class RoomManager {
     // Start the game
     this.clearRoomTimeout(roomId);
     this.gameEngine.startGame(roomId);
+  }
+
+  // Player cancels waiting and gets a credit/refund
+  async handleCancelWaiting(socket: Socket) {
+    const roomId = this.socketRooms.get(socket.id);
+    if (!roomId) return;
+
+    const room = this.rooms.get(roomId);
+    if (!room || room.status !== 'waiting') return;
+    if (room.isFreeplay) return;
+
+    const player = room.players.get(socket.id);
+    if (!player) return;
+
+    console.log(`[RoomManager] Player ${player.pubkey} cancelled waiting in room ${roomId}`);
+
+    this.clearBotTimeout(roomId);
+
+    // Credit the player (retry up to 3 times — this is real money)
+    let credited = false;
+    if (player.paid) {
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await axios.post(`${this.BACKEND_API}/api/rooms/credit`, { pubkey: player.pubkey });
+          console.log(`[RoomManager] Credited cancelled player ${player.pubkey}`);
+          credited = true;
+          break;
+        } catch (e: any) {
+          console.error(`[RoomManager] Credit attempt ${attempt}/3 failed for ${player.pubkey}:`, e?.message);
+          if (attempt < 3) {
+            await new Promise(r => setTimeout(r, 1000 * attempt));
+          }
+        }
+      }
+    } else {
+      // Unpaid player — nothing to credit
+      credited = true;
+    }
+
+    room.removePlayer(socket.id);
+    this.socketRooms.delete(socket.id);
+    socket.leave(roomId);
+
+    if (credited) {
+      socket.emit('waitingCancelled', {
+        roomId,
+        message: 'You have been refunded. Your credit is ready for your next game.',
+      });
+    } else {
+      socket.emit('waitingCancelled', {
+        roomId,
+        message: 'Cancellation failed — please contact support. Your entry may not have been credited.',
+        error: true,
+      });
+    }
+
+    // Clean up empty room
+    if (room.getPlayerCount() === 0) {
+      this.clearRoomTimeout(roomId);
+      this.rooms.delete(roomId);
+    }
   }
 
   async handleLeaveRoom(socket: Socket, explicit = false) {
