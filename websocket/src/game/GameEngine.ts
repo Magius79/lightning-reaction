@@ -135,7 +135,7 @@ export class GameEngine {
     }
 
     // Fallback: no history yet, use moderate difficulty
-    return Math.floor(Math.random() * BOT_RANGE) + 300;
+    return Math.floor(Math.random() * BOT_RANGE) + 400;
   }
 
   handleTap(roomId: string, socketId: string, clientTimestamp: number) {
