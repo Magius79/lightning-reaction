@@ -15,16 +15,17 @@ function bech32Decode(str: string): Buffer {
   }
   // Drop the 6-char checksum
   const values = data.slice(0, data.length - 6);
-  // Convert 5-bit groups to 8-bit (skip the first value which is the witness version / type byte)
+  // Convert 5-bit groups to 8-bit (Nostr NIP-19 has no witness version prefix)
   const result: number[] = [];
   let acc = 0;
   let bits = 0;
-  for (let i = 1; i < values.length; i++) {
+  for (let i = 0; i < values.length; i++) {
     acc = (acc << 5) | values[i];
     bits += 5;
     if (bits >= 8) {
       bits -= 8;
       result.push((acc >> bits) & 0xff);
+      acc &= (1 << bits) - 1;
     }
   }
   return Buffer.from(result);
@@ -40,13 +41,16 @@ function npubToHex(npub: string): string {
 
 function migrateNpubToHex() {
   const db = getDb();
-  const applied = db.prepare('SELECT id FROM migrations WHERE id = ?').get('003_npub_to_hex');
-  if (applied) return;
 
+  // Always check for remaining npub rows — a previous run may have marked the
+  // migration as applied while skipping rows due to the bech32 decode bug.
   const npubRows: any[] = db.prepare("SELECT * FROM players WHERE pubkey LIKE 'npub1%'").all();
   if (npubRows.length === 0) {
-    // Nothing to migrate, but mark as done
-    db.prepare('INSERT INTO migrations (id, applied_at) VALUES (?, ?)').run('003_npub_to_hex', Date.now());
+    // Ensure migration is recorded even when there's nothing to do
+    const applied = db.prepare('SELECT id FROM migrations WHERE id = ?').get('003_npub_to_hex');
+    if (!applied) {
+      db.prepare('INSERT INTO migrations (id, applied_at) VALUES (?, ?)').run('003_npub_to_hex', Date.now());
+    }
     return;
   }
 
@@ -98,7 +102,7 @@ function migrateNpubToHex() {
       db.prepare('DELETE FROM players WHERE pubkey = ?').run(row.pubkey);
     }
 
-    db.prepare('INSERT INTO migrations (id, applied_at) VALUES (?, ?)').run('003_npub_to_hex', Date.now());
+    db.prepare('INSERT OR REPLACE INTO migrations (id, applied_at) VALUES (?, ?)').run('003_npub_to_hex', Date.now());
     db.exec('COMMIT');
     console.log(`Migrated ${npubRows.length} npub pubkey(s) to hex`);
   } catch (e) {
