@@ -668,10 +668,19 @@ const GameScreen = ({ navigation, route }: any) => {
 
               {freeplay ? (
                 <>
-                  <TouchableOpacity style={styles.actionButton} onPress={() => navigation.replace('Game', { freeplay: true })}>
+                  <TouchableOpacity style={styles.actionButton} onPress={() => {
+                    resetForNewRound();
+                    setStatus('waiting');
+                    joinedAt.current = Date.now();
+                    wsService.joinFreeplay(pubkey);
+                  }}>
                     <Text style={styles.actionButtonText}>Try Again</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.playForRealButton} onPress={() => navigation.replace('Game')}>
+                  <TouchableOpacity style={styles.playForRealButton} onPress={() => {
+                    resetForNewRound();
+                    setShowPayment(true);
+                    setStatus('paying');
+                  }}>
                     <Text style={styles.playForRealText}>Play for Real Sats ⚡</Text>
                   </TouchableOpacity>
                 </>
