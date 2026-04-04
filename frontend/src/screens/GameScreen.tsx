@@ -235,17 +235,23 @@ const GameScreen = ({ navigation, route }: any) => {
   }, [status]);
 
   useEffect(() => {
+    let cancelled = false;
     loadSounds();
 
-    // Load pubkey early (avoid races)
-    AsyncStorage.getItem('user_pubkey')
-      .then((pk) => {
-        if (pk) setPubkey(pk);
-        else setPubkey('anon');
-      })
-      .catch(() => setPubkey('anon'));
+    const setup = async () => {
+      // Load pubkey before connecting so we can send it with auth
+      try {
+        const pk = await AsyncStorage.getItem('user_pubkey');
+        if (cancelled) return;
+        setPubkey(pk || 'anon');
+      } catch {
+        if (cancelled) return;
+        setPubkey('anon');
+      }
 
-    wsService.connect();
+      // Wait for socket to be ready before registering listeners
+      await wsService.connect();
+      if (cancelled) return;
 
     const onRoomUpdated = (data: any) => {
       if (Array.isArray(data?.players)) setPlayers(data.players);
@@ -473,8 +479,12 @@ const GameScreen = ({ navigation, route }: any) => {
       wsService.rejoinRoom(pk, rid);
     };
     wsService.on('connect', onReconnect);
+    }; // end setup()
+
+    setup();
 
     return () => {
+      cancelled = true;
       // Avoid duplicate listeners if screen remounts
       wsService.off('roomUpdated');
       wsService.off('gameStart');
