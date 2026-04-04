@@ -79,7 +79,7 @@ const PaymentModal = ({ visible, onClose, onSuccess, pubkey }: PaymentModalProps
   };
 
   useEffect(() => {
-    if (!visible) {
+    if (!visible || status === 'success') {
       stopPolling();
       fetchInFlightRef.current = false;
       setInvoice(null);
