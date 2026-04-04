@@ -101,7 +101,7 @@ const HomeScreen = ({ navigation }: any) => {
       setMyPubkey(pubkey);
 
       // Try to fetch Nostr display name and picture
-      const hex = npubToHex(pubkey);
+      const hex = /^[0-9a-f]{64}$/i.test(pubkey) ? pubkey : npubToHex(pubkey);
       if (hex) {
         const profile = await fetchNostrProfile(hex);
         const name = profile?.display_name || profile?.name;
@@ -146,7 +146,7 @@ const HomeScreen = ({ navigation }: any) => {
         const names = new Map<string, string>();
         await Promise.all(
           (data || []).map(async (p: any) => {
-            const hex = npubToHex(p.pubkey);
+            const hex = /^[0-9a-f]{64}$/i.test(p.pubkey) ? p.pubkey : npubToHex(p.pubkey);
             if (!hex) return;
             const profile = await fetchNostrProfile(hex);
             const name = profile?.display_name || profile?.name;

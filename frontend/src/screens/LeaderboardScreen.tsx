@@ -138,7 +138,7 @@ const LeaderboardScreen = ({ navigation }: any) => {
 
         await Promise.all(
           mapped.map(async (entry) => {
-            const hex = npubToHex(entry.pubkey);
+            const hex = /^[0-9a-f]{64}$/i.test(entry.pubkey) ? entry.pubkey : npubToHex(entry.pubkey);
             if (!hex) return;
             const profile = await fetchNostrProfile(hex);
             const name = profile?.display_name || profile?.name;
