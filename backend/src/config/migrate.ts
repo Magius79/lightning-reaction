@@ -1,5 +1,114 @@
 import { getDb } from './database';
 
+// ---------- inline bech32 decoder (npub only) ----------
+const BECH32_CHARSET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l';
+
+function bech32Decode(str: string): Buffer {
+  const lower = str.toLowerCase();
+  const pos = lower.lastIndexOf('1');
+  if (pos < 1) throw new Error('Invalid bech32: no separator');
+  const data: number[] = [];
+  for (let i = pos + 1; i < lower.length; i++) {
+    const v = BECH32_CHARSET.indexOf(lower[i]);
+    if (v === -1) throw new Error('Invalid bech32 character');
+    data.push(v);
+  }
+  // Drop the 6-char checksum
+  const values = data.slice(0, data.length - 6);
+  // Convert 5-bit groups to 8-bit (skip the first value which is the witness version / type byte)
+  const result: number[] = [];
+  let acc = 0;
+  let bits = 0;
+  for (let i = 1; i < values.length; i++) {
+    acc = (acc << 5) | values[i];
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      result.push((acc >> bits) & 0xff);
+    }
+  }
+  return Buffer.from(result);
+}
+
+function npubToHex(npub: string): string {
+  const decoded = bech32Decode(npub);
+  if (decoded.length !== 32) throw new Error(`Expected 32 bytes, got ${decoded.length}`);
+  return decoded.toString('hex');
+}
+
+// ---------- programmatic (data) migrations ----------
+
+function migrateNpubToHex() {
+  const db = getDb();
+  const applied = db.prepare('SELECT id FROM migrations WHERE id = ?').get('003_npub_to_hex');
+  if (applied) return;
+
+  const npubRows: any[] = db.prepare("SELECT * FROM players WHERE pubkey LIKE 'npub1%'").all();
+  if (npubRows.length === 0) {
+    // Nothing to migrate, but mark as done
+    db.prepare('INSERT INTO migrations (id, applied_at) VALUES (?, ?)').run('003_npub_to_hex', Date.now());
+    return;
+  }
+
+  db.exec('BEGIN');
+  try {
+    for (const row of npubRows) {
+      let hex: string;
+      try {
+        hex = npubToHex(row.pubkey);
+      } catch (e) {
+        console.warn(`Skipping invalid npub ${row.pubkey}: ${e}`);
+        continue;
+      }
+
+      const existing: any = db.prepare('SELECT * FROM players WHERE pubkey = ?').get(hex);
+
+      if (existing) {
+        // Merge stats into existing hex row
+        const mergedPlayed = (existing.games_played || 0) + (row.games_played || 0);
+        const mergedWon = (existing.games_won || 0) + (row.games_won || 0);
+        const mergedWinnings = (existing.total_winnings || 0) + (row.total_winnings || 0);
+
+        let mergedAvg: number | null = null;
+        if (existing.avg_reaction_time != null && row.avg_reaction_time != null) {
+          mergedAvg = Math.min(existing.avg_reaction_time, row.avg_reaction_time);
+        } else {
+          mergedAvg = existing.avg_reaction_time ?? row.avg_reaction_time ?? null;
+        }
+
+        db.prepare(
+          `UPDATE players SET games_played = ?, games_won = ?, total_winnings = ?, avg_reaction_time = ?
+           WHERE pubkey = ?`
+        ).run(mergedPlayed, mergedWon, mergedWinnings, mergedAvg, hex);
+      } else {
+        // Insert as new hex row
+        db.prepare(
+          `INSERT INTO players (pubkey, display_name, games_played, games_won, total_winnings, avg_reaction_time, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ).run(hex, row.display_name, row.games_played, row.games_won, row.total_winnings, row.avg_reaction_time, row.created_at);
+      }
+
+      // Update all FK references to point to hex pubkey
+      db.prepare('UPDATE room_players SET pubkey = ? WHERE pubkey = ?').run(hex, row.pubkey);
+      db.prepare('UPDATE games SET winner_pubkey = ? WHERE winner_pubkey = ?').run(hex, row.pubkey);
+      db.prepare('UPDATE game_players SET pubkey = ? WHERE pubkey = ?').run(hex, row.pubkey);
+      db.prepare('UPDATE transactions SET pubkey = ? WHERE pubkey = ?').run(hex, row.pubkey);
+
+      // Delete old npub row
+      db.prepare('DELETE FROM players WHERE pubkey = ?').run(row.pubkey);
+    }
+
+    db.prepare('INSERT INTO migrations (id, applied_at) VALUES (?, ?)').run('003_npub_to_hex', Date.now());
+    db.exec('COMMIT');
+    console.log(`Migrated ${npubRows.length} npub pubkey(s) to hex`);
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+// ---------- schema migrations ----------
+
 const MIGRATIONS: Array<{ id: string; sql: string }> = [
   {
     id: '001_init',
@@ -118,4 +227,7 @@ export function migrate() {
     db.exec('ROLLBACK');
     throw e;
   }
+
+  // Run programmatic data migrations after schema migrations
+  migrateNpubToHex();
 }
