@@ -41,14 +41,19 @@ export async function signAuthChallenge(): Promise<{
   timestamp: number;
   sig: string;
 } | null> {
-  const kp = await loadKeypair();
-  if (!kp) return null;
+  let kp = await loadKeypair();
+  
+  // Migration: old app stored pubkey but no private key
+  if (!kp) {
+    const newKp = generateKeypair();
+    await saveKeypair(newKp.nsec, newKp.pubkey);
+    kp = newKp;
+  }
 
   const timestamp = Date.now();
   const message = `lightning-reaction-auth:${timestamp}`;
   const msgBytes = new TextEncoder().encode(message);
   const sigBytes = await schnorr.signAsync(msgBytes, etc.hexToBytes(kp.nsec));
   const sig = etc.bytesToHex(sigBytes);
-
   return { pubkey: kp.pubkey, timestamp, sig };
 }
