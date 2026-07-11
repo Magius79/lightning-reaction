@@ -113,7 +113,14 @@ export async function payInvoice(bolt11: string, amountSats?: number): Promise<{
   requireAdminKey();
   const url = `${env.LNBITS_URL.replace(/\/$/, '')}/api/v1/payments`;
 
-  // Retry 3x
+  // Retry up to 3x on transient failures only. The Cloudflare→WireGuard→Start9
+  // path throws transient 5xx/network errors that a retry can clear. Two classes
+  // of error are terminal and must NOT be retried (a retry could double-pay or
+  // is guaranteed to fail):
+  //   - 4xx: LNbits rejected the invoice (bad/expired/already-paid). Won't succeed.
+  //   - any response we received but couldn't confirm as success: the payment may
+  //     already be in flight, so re-sending the same bolt11 risks a double payment.
+  // Terminal errors are thrown as HttpError and rethrown immediately from catch.
   let lastErr: any;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -127,23 +134,40 @@ export async function payInvoice(bolt11: string, amountSats?: number): Promise<{
       });
 
       const text = await res.text();
+
       if (!res.ok) {
         logger.error({ attempt, status: res.status, body: text }, 'LNbits payInvoice failed');
-        // Don't retry client errors (4xx) — they'll never succeed
+        // 4xx — terminal, retrying will never succeed.
         if (res.status >= 400 && res.status < 500) {
           throw new HttpError(502, `LNbits rejected payment: ${text}`);
         }
-        throw new Error(text);
+        // 5xx / gateway — transient, fall through to retry.
+        throw new Error(`LNbits ${res.status}: ${text}`);
       }
-      const json = JSON.parse(text) as any;
-      if (!json.payment_hash) throw new Error('Missing payment_hash');
+
+      // 2xx: the payment was accepted. Any failure to parse it is terminal —
+      // the sats likely already went out, so we must not retry.
+      let json: any;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        throw new HttpError(502, `LNbits returned an unparseable success response: ${text.slice(0, 200)}`);
+      }
+      if (!json.payment_hash) {
+        throw new HttpError(502, 'LNbits success response missing payment_hash');
+      }
       return { paymentHash: json.payment_hash };
     } catch (e) {
       lastErr = e;
-      await new Promise((r) => setTimeout(r, 250 * attempt));
+      // Terminal errors (thrown as HttpError above) are never retried.
+      if (e instanceof HttpError) throw e;
+      // Transient error — back off, but don't sleep after the final attempt.
+      if (attempt < 3) {
+        await new Promise((r) => setTimeout(r, 250 * attempt));
+      }
     }
   }
 
   logger.error({ err: lastErr }, 'LNbits payInvoice exhausted retries');
-  throw new HttpError(502, 'Failed to pay Lightning invoice');
+  throw new HttpError(502, `Failed to pay Lightning invoice: ${lastErr?.message || 'unknown error'}`);
 }
