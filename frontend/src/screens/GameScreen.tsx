@@ -587,6 +587,18 @@ const GameScreen = ({ navigation, route }: any) => {
   const minutes = Math.floor(timeRemaining / 60);
   const seconds = timeRemaining % 60;
 
+  // Bot-warning countdown. Prefer the server's `botWarning` event (botCountdown),
+  // but fall back to our own waiting timer so the warning still shows if that
+  // event never arrives. These must match the server: warning at 20s, bot at 30s
+  // (BOT_WARNING_DELAY_MS + BOT_JOIN_AFTER_WARNING_MS in RoomManager).
+  const BOT_WARNING_AT_SEC = 20;
+  const BOT_JOIN_AT_SEC = 30;
+  const botWarnFromTimer =
+    status === 'waiting' && !freeplay && waitingSeconds >= BOT_WARNING_AT_SEC
+      ? Math.max(1, BOT_JOIN_AT_SEC - waitingSeconds)
+      : null;
+  const botWarnSecondsLeft = botCountdown ?? botWarnFromTimer;
+
   const backgroundColor = bgAnim.interpolate({
     inputRange: [0, 1, 2],
     outputRange: [COLORS.background, COLORS.danger, COLORS.success],
@@ -620,10 +632,10 @@ const GameScreen = ({ navigation, route }: any) => {
                 {minutes}:{seconds.toString().padStart(2, '0')}
               </Text>
 
-              {botCountdown !== null && !freeplay && (
+              {botWarnSecondsLeft !== null && !freeplay && (
                 <View style={styles.botWarningContainer}>
                   <Text style={styles.botWarningText}>
-                    Bot joining in {botCountdown}s...
+                    Bot joining in {botWarnSecondsLeft}s...
                   </Text>
                   <TouchableOpacity
                     style={styles.cancelButton}
