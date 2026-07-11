@@ -137,24 +137,27 @@ export async function payInvoice(bolt11: string, amountSats?: number): Promise<{
 
       if (!res.ok) {
         logger.error({ attempt, status: res.status, body: text }, 'LNbits payInvoice failed');
-        // 4xx — terminal, retrying will never succeed.
+        // 4xx — terminal. The invoice was rejected (bad/expired/wrong amount,
+        // or wallet issue). Surface as 422 so callers don't auto-retry; the
+        // winner can submit a fresh invoice.
         if (res.status >= 400 && res.status < 500) {
-          throw new HttpError(502, `LNbits rejected payment: ${text}`);
+          throw new HttpError(422, `LNbits rejected payment: ${text}`);
         }
         // 5xx / gateway — transient, fall through to retry.
         throw new Error(`LNbits ${res.status}: ${text}`);
       }
 
-      // 2xx: the payment was accepted. Any failure to parse it is terminal —
-      // the sats likely already went out, so we must not retry.
+      // 2xx: the payment was accepted. If we can't confirm it (unparseable body
+      // or missing hash), the sats likely already went out — surface as 409 so
+      // NO layer retries or re-pays. This state needs manual reconciliation.
       let json: any;
       try {
         json = JSON.parse(text);
       } catch {
-        throw new HttpError(502, `LNbits returned an unparseable success response: ${text.slice(0, 200)}`);
+        throw new HttpError(409, `LNbits returned an unparseable success response: ${text.slice(0, 200)}`);
       }
       if (!json.payment_hash) {
-        throw new HttpError(502, 'LNbits success response missing payment_hash');
+        throw new HttpError(409, 'LNbits success response missing payment_hash');
       }
       return { paymentHash: json.payment_hash };
     } catch (e) {

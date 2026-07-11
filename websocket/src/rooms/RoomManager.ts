@@ -310,6 +310,17 @@ export class RoomManager {
       return;
     }
 
+    // Payout previously ended in an unconfirmed state — the sats may already
+    // have gone out. Block resubmission to avoid a double payment.
+    if (room.payoutStatus === 'failed') {
+      socket.emit('payoutFailed', {
+        roomId,
+        error: 'This payout is in an unconfirmed state. Please contact support before retrying.',
+        retryable: false,
+      });
+      return;
+    }
+
     const key = `${roomId}:${room.winnerPubkey}`;
     if (this.payoutInFlight.has(key)) return;
     this.payoutInFlight.add(key);
@@ -346,21 +357,33 @@ export class RoomManager {
       socket.emit('payoutSent', { roomId, paymentHash: resp.data?.paymentHash });
       console.log(`Payout successful for room ${roomId}: paymentHash=${resp.data?.paymentHash}`);
     } catch (e: any) {
-      // Reset to 'requested' so the player can retry with a different invoice
-      room.payoutStatus = 'requested';
-
       // Better error message propagation (shows backend {error} if present)
       let msg = e?.message || 'Unknown error';
+      let status: number | undefined;
       if (axios.isAxiosError(e)) {
-        const status = e.response?.status;
+        status = e.response?.status;
         const data = e.response?.data as any;
         const serverMsg = data?.error || data?.message;
         if (serverMsg) msg = serverMsg;
         if (status) msg = `${msg} (HTTP ${status})`;
       }
 
-      socket.emit('payoutFailed', { roomId, error: msg, retryable: true });
-      console.error('Payout submit error:', msg, e?.response?.data || e);
+      if (status === 409) {
+        // Payment state unknown — the sats may already have been sent. Mark
+        // terminal and do NOT invite a resubmit (double-pay risk).
+        room.payoutStatus = 'failed';
+        socket.emit('payoutFailed', {
+          roomId,
+          error: `${msg} — please contact support before retrying.`,
+          retryable: false,
+        });
+        console.error('Payout in unconfirmed state (terminal, not retryable):', msg);
+      } else {
+        // Recoverable failure — reset so the winner can submit another invoice.
+        room.payoutStatus = 'requested';
+        socket.emit('payoutFailed', { roomId, error: msg, retryable: true });
+        console.error('Payout submit error:', msg, e?.response?.data || e);
+      }
     } finally {
       this.payoutInFlight.delete(key);
     }
