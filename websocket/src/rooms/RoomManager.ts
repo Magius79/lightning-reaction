@@ -35,6 +35,57 @@ export class RoomManager {
     this.gameEngine = new GameEngine(io, this.rooms, this.antiCheat);
     this.gameEngine.setPayoutRequestedCallback((roomId) => this.startPayoutTimeout(roomId));
     this.gameEngine.setSafetyCleanupCallback((roomId) => this.handleSafetyCleanup(roomId));
+    this.gameEngine.setRoundExpiredCallback((roomId) => this.handleRoundExpired(roomId));
+  }
+
+  /**
+   * A round's green window expired with no tap (both humans abandoned). Credit
+   * each paid, non-disqualified human — a disqualified early-tapper forfeited —
+   * and tear the room down. Reuses the roomTimeout client event so installed
+   * apps show the credit notice without a frontend change.
+   */
+  private async handleRoundExpired(roomId: string) {
+    const room = this.rooms.get(roomId);
+    if (!room || room.status !== 'green') return; // someone tapped / already resolved
+
+    console.log(`[RoomManager] Round ${roomId} expired with no tap — crediting eligible players, no winner`);
+    room.status = 'finished';
+    room.payoutStatus = 'none';
+
+    if (!room.isFreeplay) {
+      for (const [socketId, player] of room.players) {
+        if (isBot(socketId) || !player.paid || player.disqualified) continue;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            await backendApi.post(`${this.BACKEND_API}/api/rooms/credit`, { pubkey: player.pubkey });
+            console.log(`[RoomManager] Credited ${player.pubkey} for expired round ${roomId}`);
+            break;
+          } catch (e: any) {
+            console.error(`[RoomManager] Credit attempt ${attempt}/3 failed for ${player.pubkey}:`, e?.message);
+            if (attempt < 3) await new Promise((r) => setTimeout(r, 1000 * attempt));
+          }
+        }
+      }
+    }
+
+    this.io.to(roomId).emit('roomTimeout', {
+      roomId,
+      message: room.isFreeplay
+        ? 'Round expired — no one tapped in time.'
+        : 'Round expired — no one tapped in time. You have a free credit for your next game.',
+    });
+
+    for (const [sid, rid] of this.socketRooms) {
+      if (rid === roomId) {
+        const sock = this.io.sockets.sockets.get(sid);
+        if (sock) sock.leave(roomId);
+        this.socketRooms.delete(sid);
+      }
+    }
+    this.clearRoomTimeout(roomId);
+    this.clearBotTimeout(roomId);
+    this.clearPayoutTimeout(roomId);
+    this.rooms.delete(roomId);
   }
 
   /** Clean up all resources for a stale room (called by GameEngine 15-min safety timeout). */

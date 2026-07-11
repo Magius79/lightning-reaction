@@ -9,7 +9,9 @@ export class GameEngine {
   private antiCheat: AntiCheat;
   private onPayoutRequested?: (roomId: string) => void;
   private onSafetyCleanup?: (roomId: string) => void;
+  private onRoundExpired?: (roomId: string) => void;
   private readonly BACKEND_API = process.env.BACKEND_API_URL || 'http://localhost:4000';
+  private readonly ROUND_EXPIRY_MS = 15 * 1000; // no tap within 15s of green → void the round
   // Note: backend API calls (verify-payment, payout, refund) are handled by RoomManager.
 
   constructor(io: Server, rooms: Map<string, Room>, antiCheat: AntiCheat) {
@@ -26,6 +28,11 @@ export class GameEngine {
   /** Register a callback for the 15-min safety cleanup (used to clean socketRooms/timers). */
   setSafetyCleanupCallback(cb: (roomId: string) => void) {
     this.onSafetyCleanup = cb;
+  }
+
+  /** Register a callback fired when a round's green window expires with no tap. */
+  setRoundExpiredCallback(cb: (roomId: string) => void) {
+    this.onRoundExpired = cb;
   }
 
   startGame(roomId: string) {
@@ -80,6 +87,16 @@ export class GameEngine {
 
       // Schedule bot tap if there's a bot in the room
       this.scheduleBotTap(roomId, room);
+
+      // Round expiry: if nobody taps within the window, void the round so it
+      // doesn't hang until the 15-min safety cleanup. Only fires when every
+      // human abandons — a bot always taps well before this.
+      setTimeout(() => {
+        if (room.status === 'green') {
+          console.log(`[GameEngine] Round in room ${roomId} expired with no tap`);
+          this.onRoundExpired?.(roomId);
+        }
+      }, this.ROUND_EXPIRY_MS);
     }, randomDelay);
   }
 
