@@ -3,6 +3,7 @@ import { StyleSheet, Text, View, FlatList } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS, API_URL } from '../constants/theme';
 import { Trophy } from 'lucide-react-native';
+import { fetchNostrProfile, profileDisplayName } from '../services/nostr';
 
 type LeaderboardEntry = {
   pubkey: string;
@@ -43,69 +44,6 @@ function npubToHex(npub: string): string | null {
   }
 }
 
-// Fetch a single Nostr profile from relay
-function fetchNostrProfile(
-  hexPubkey: string,
-  timeoutMs = 4000
-): Promise<{ name?: string; display_name?: string } | null> {
-  const relays = ['wss://relay.damus.io', 'wss://relay.nostr.band', 'wss://nos.lol'];
-
-  return new Promise((resolve) => {
-    let resolved = false;
-    let attempt = 0;
-
-    const tryRelay = (relayUrl: string) => {
-      try {
-        const ws = new WebSocket(relayUrl);
-        const timer = setTimeout(() => {
-          ws.close();
-          if (!resolved) {
-            attempt++;
-            if (attempt < relays.length) tryRelay(relays[attempt]);
-            else { resolved = true; resolve(null); }
-          }
-        }, timeoutMs);
-
-        ws.onopen = () => {
-          ws.send(JSON.stringify(['REQ', 'p_' + Date.now(), { kinds: [0], authors: [hexPubkey], limit: 1 }]));
-        };
-
-        ws.onmessage = (event) => {
-          try {
-            const msg = JSON.parse(event.data);
-            if (msg[0] === 'EVENT' && msg[2]?.content) {
-              clearTimeout(timer);
-              ws.close();
-              if (!resolved) { resolved = true; resolve(JSON.parse(msg[2].content)); }
-            } else if (msg[0] === 'EOSE') {
-              clearTimeout(timer);
-              ws.close();
-              if (!resolved) { resolved = true; resolve(null); }
-            }
-          } catch {}
-        };
-
-        ws.onerror = () => {
-          clearTimeout(timer);
-          if (!resolved) {
-            attempt++;
-            if (attempt < relays.length) tryRelay(relays[attempt]);
-            else { resolved = true; resolve(null); }
-          }
-        };
-      } catch {
-        if (!resolved) {
-          attempt++;
-          if (attempt < relays.length) tryRelay(relays[attempt]);
-          else { resolved = true; resolve(null); }
-        }
-      }
-    };
-
-    tryRelay(relays[0]);
-  });
-}
-
 const LeaderboardScreen = ({ navigation }: any) => {
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -141,7 +79,7 @@ const LeaderboardScreen = ({ navigation }: any) => {
             const hex = /^[0-9a-f]{64}$/i.test(entry.pubkey) ? entry.pubkey : npubToHex(entry.pubkey);
             if (!hex) return;
             const profile = await fetchNostrProfile(hex);
-            const name = profile?.display_name || profile?.name;
+            const name = profileDisplayName(profile);
             if (name) updates.set(entry.pubkey, name);
           })
         );

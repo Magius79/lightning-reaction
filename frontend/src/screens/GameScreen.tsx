@@ -14,6 +14,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS } from '../constants/theme';
 import { wsService } from '../services/websocket';
+import { fetchNostrProfile, profileDisplayName } from '../services/nostr';
 import { X, Users, Share2 } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { Audio } from 'expo-av';
@@ -144,6 +145,8 @@ const GameScreen = ({ navigation, route }: any) => {
 
   // websocket `gameEnd` sends winner as pubkey string (or null)
   const [winnerPubkey, setWinnerPubkey] = useState<string | null>(null);
+  // Resolved Nostr display name for the winner (falls back to short pubkey)
+  const [winnerName, setWinnerName] = useState<string | null>(null);
 
   const [showPayment, setShowPayment] = useState(!freeplay);
   const [pubkey, setPubkey] = useState<string>(''); // load from AsyncStorage
@@ -179,6 +182,7 @@ const GameScreen = ({ navigation, route }: any) => {
     setPlayers([]);
     setCountdown(0);
     setWinnerPubkey(null);
+    setWinnerName(null);
     setReactionTime(null);
     setPrizePool(null);
     currentRoomId.current = null;
@@ -318,6 +322,18 @@ const GameScreen = ({ navigation, route }: any) => {
       setReactionTime(data?.reactionTime ?? null);
       setPrizePool(data?.prizePool ?? null);
       setStatus('result');
+
+      // Resolve the winner's Nostr name for the result screen (skip bot / self)
+      setWinnerName(null);
+      const w: string | null = data?.winner ?? null;
+      if (w && w !== BOT_PUBKEY && w !== myPk) {
+        fetchNostrProfile(w)
+          .then((prof) => {
+            const n = profileDisplayName(prof);
+            if (n) setWinnerName(n);
+          })
+          .catch(() => {});
+      }
 
       // Sound + haptics
       if (won) {
@@ -660,7 +676,7 @@ const GameScreen = ({ navigation, route }: any) => {
 
               {!freeplay && winnerPubkey && winnerPubkey !== pubkey ? (
                 <Text style={styles.resultSubtitle}>
-                  {`Winner: ${displayName(winnerPubkey)}`}
+                  {`Winner: ${winnerName || displayName(winnerPubkey)}`}
                 </Text>
               ) : !freeplay && !winnerPubkey ? (
                 <Text style={styles.resultSubtitle}>No winner</Text>

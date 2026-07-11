@@ -3,6 +3,7 @@ import { StyleSheet, Text, View, TouchableOpacity, ScrollView, RefreshControl, I
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS, API_URL } from '../constants/theme';
 import { Zap, Trophy, BarChart2, Settings, User } from 'lucide-react-native';
+import { fetchNostrProfile, profileDisplayName } from '../services/nostr';
 
 // Decode npub bech32 to hex pubkey
 function npubToHex(npub: string): string | null {
@@ -35,49 +36,6 @@ function npubToHex(npub: string): string | null {
   }
 }
 
-// Fetch Nostr profile (kind 0) from relay
-function fetchNostrProfile(hexPubkey: string, timeoutMs = 5000): Promise<{ name?: string; display_name?: string; picture?: string } | null> {
-  return new Promise((resolve) => {
-    try {
-      const ws = new WebSocket('wss://relay.damus.io');
-      const timer = setTimeout(() => {
-        ws.close();
-        resolve(null);
-      }, timeoutMs);
-
-      ws.onopen = () => {
-        const subId = 'profile_' + Date.now();
-        ws.send(JSON.stringify(['REQ', subId, { kinds: [0], authors: [hexPubkey], limit: 1 }]));
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg[0] === 'EVENT' && msg[2]?.content) {
-            const profile = JSON.parse(msg[2].content);
-            clearTimeout(timer);
-            ws.close();
-            resolve(profile);
-          } else if (msg[0] === 'EOSE') {
-            clearTimeout(timer);
-            ws.close();
-            resolve(null);
-          }
-        } catch {
-          // ignore parse errors
-        }
-      };
-
-      ws.onerror = () => {
-        clearTimeout(timer);
-        resolve(null);
-      };
-    } catch {
-      resolve(null);
-    }
-  });
-}
-
 const HomeScreen = ({ navigation }: any) => {
   const [displayName, setDisplayName] = useState('');
   const [profilePic, setProfilePic] = useState<string | null>(null);
@@ -104,7 +62,7 @@ const HomeScreen = ({ navigation }: any) => {
       const hex = /^[0-9a-f]{64}$/i.test(pubkey) ? pubkey : npubToHex(pubkey);
       if (hex) {
         const profile = await fetchNostrProfile(hex);
-        const name = profile?.display_name || profile?.name;
+        const name = profileDisplayName(profile);
         if (name) {
           setDisplayName(name);
         }
@@ -149,7 +107,7 @@ const HomeScreen = ({ navigation }: any) => {
             const hex = /^[0-9a-f]{64}$/i.test(p.pubkey) ? p.pubkey : npubToHex(p.pubkey);
             if (!hex) return;
             const profile = await fetchNostrProfile(hex);
-            const name = profile?.display_name || profile?.name;
+            const name = profileDisplayName(profile);
             if (name) names.set(p.pubkey, name);
           })
         );
