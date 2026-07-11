@@ -11,12 +11,22 @@ const EnvSchema = z.object({
 
   DB_PATH: z.string().optional().default('./data/app.sqlite'),
 
+  // Shared secret for server-to-server (websocket → backend) calls to the
+  // money/internal routes (/payout, /verify-payment, /refund, credit,
+  // update-stats). Required: these routes are publicly reachable on Railway,
+  // so without an enforced key anyone could drain the wallet.
+  INTERNAL_API_KEY: z.string().min(16, 'INTERNAL_API_KEY must be at least 16 chars'),
+
   LNBITS_URL: z.string().url().optional().default('https://legend.lnbits.com'),
   LNBITS_ADMIN_KEY: z.string().optional().default(''),
   LNBITS_INVOICE_KEY: z.string().optional().default(''),
 
   ENTRY_FEE: z.coerce.number().int().positive().optional().default(100),
   HOUSE_EDGE: z.coerce.number().min(0).max(1).optional().default(0.1),
+  // Hard ceiling on any single payout — backstop against a malicious or
+  // buggy amountSats. Max legit pool is ~900 (10 players × 90), so 2000
+  // leaves headroom while blocking a large drain.
+  MAX_PAYOUT_SATS: z.coerce.number().int().positive().optional().default(2000),
   INVOICE_EXPIRY_SECONDS: z.coerce.number().int().positive().optional().default(300),
   LIGHTNING_MEMO: z.string().optional().default('Lightning Reaction - Entry Fee'),
 

@@ -1,5 +1,6 @@
 import { Server, Socket } from 'socket.io';
 import axios from 'axios';
+import { backendApi } from '../config/backendApi';
 import { Room, isBot, BOT_PUBKEY } from './Room';
 import { Matchmaker } from './Matchmaker';
 import { GameEngine } from '../game/GameEngine';
@@ -87,7 +88,7 @@ export class RoomManager {
       const isCredit = paymentHash.startsWith('credit_');
 
       if (!allowBot && !isCredit) {
-        const response = await axios.post(`${this.BACKEND_API}/verify-payment`, { pubkey, paymentHash });
+        const response = await backendApi.post(`${this.BACKEND_API}/verify-payment`, { pubkey, paymentHash });
         if (!response.data.verified) {
           socket.emit('error', { message: 'Payment verification failed' });
           return;
@@ -327,7 +328,7 @@ export class RoomManager {
       let resp: any;
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-          resp = await axios.post(`${this.BACKEND_API}/payout`, { bolt11, amountSats });
+          resp = await backendApi.post(`${this.BACKEND_API}/payout`, { bolt11, amountSats });
           break;
         } catch (retryErr: any) {
           const status = retryErr?.response?.status;
@@ -390,7 +391,7 @@ export class RoomManager {
     // Credit each player via the backend and notify them directly
     for (const [socketId, player] of room.players) {
       try {
-        await axios.post(`${this.BACKEND_API}/api/rooms/credit`, { pubkey: player.pubkey });
+        await backendApi.post(`${this.BACKEND_API}/api/rooms/credit`, { pubkey: player.pubkey });
         console.log(`[RoomManager] Credited player ${player.pubkey}`);
       } catch (e: any) {
         console.error(`[RoomManager] Failed to credit player ${player.pubkey}:`, e?.message);
@@ -570,7 +571,7 @@ export class RoomManager {
     if (player.paid) {
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-          await axios.post(`${this.BACKEND_API}/api/rooms/credit`, { pubkey: player.pubkey });
+          await backendApi.post(`${this.BACKEND_API}/api/rooms/credit`, { pubkey: player.pubkey });
           console.log(`[RoomManager] Credited cancelled player ${player.pubkey}`);
           credited = true;
           break;
@@ -632,7 +633,7 @@ export class RoomManager {
 
       if (player?.paid) {
         try {
-          await axios.post(`${this.BACKEND_API}/api/rooms/credit`, { pubkey: player.pubkey });
+          await backendApi.post(`${this.BACKEND_API}/api/rooms/credit`, { pubkey: player.pubkey });
           console.log(`[RoomManager] Credited disconnected player ${player.pubkey}`);
         } catch (e: any) {
           console.error(`[RoomManager] Failed to credit disconnected player ${player.pubkey}:`, e?.message);
@@ -675,14 +676,14 @@ export class RoomManager {
     // Explicit leave while waiting: credit the player and clean up
     if (explicit && player && room.status === 'waiting') {
       try {
-        await axios.post(`${this.BACKEND_API}/api/rooms/credit`, { pubkey: player.pubkey });
+        await backendApi.post(`${this.BACKEND_API}/api/rooms/credit`, { pubkey: player.pubkey });
         console.log(`[RoomManager] Credited early-leaver ${player.pubkey}`);
       } catch (error) {
         console.error('Credit error:', error);
       }
     } else if (player && !player.paid) {
       try {
-        await axios.post(`${this.BACKEND_API}/refund`, { pubkey: player.pubkey });
+        await backendApi.post(`${this.BACKEND_API}/refund`, { pubkey: player.pubkey });
       } catch (error) {
         console.error('Refund error:', error);
       }

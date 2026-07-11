@@ -1,7 +1,7 @@
 import { Server } from 'socket.io';
-import axios from 'axios';
 import { Room, isBot, BOT_PUBKEY } from '../rooms/Room';
 import { AntiCheat } from './AntiCheat';
+import { backendApi } from '../config/backendApi';
 
 export class GameEngine {
   private io: Server;
@@ -233,7 +233,7 @@ export class GameEngine {
       if (statsPayload.length > 0) {
         for (let attempt = 1; attempt <= 3; attempt++) {
           try {
-            await axios.post(`${this.BACKEND_API}/api/rooms/update-stats`, { players: statsPayload });
+            await backendApi.post(`${this.BACKEND_API}/api/rooms/update-stats`, { players: statsPayload });
             console.log(`[GameEngine] Updated stats for ${statsPayload.length} players in room ${roomId}`);
             break;
           } catch (e: any) {

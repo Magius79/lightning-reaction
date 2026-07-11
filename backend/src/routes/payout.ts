@@ -5,8 +5,12 @@ import { parseBody } from '../utils/validation';
 import { HttpError } from '../utils/httpError';
 import { payInvoice } from '../services/lightning';
 import { createPendingPayout, confirmByHash, getByHash } from '../services/transactions';
+import { internalAuth } from '../utils/internalAuth';
+import { env } from '../config/env';
 
 export const payoutRouter = Router();
+
+payoutRouter.use(internalAuth);
 
 // Real payout endpoint.
 // Requires the winner to provide a BOLT11 invoice (or LNURL-pay, future).
@@ -28,6 +32,12 @@ payoutRouter.post('/', async (req, res, next) => {
       }),
       req.body
     );
+
+    // Hard ceiling — refuse anything above the configured max regardless of
+    // what the caller claims the invoice is worth.
+    if (body.amountSats > env.MAX_PAYOUT_SATS) {
+      throw new HttpError(400, `Payout amount ${body.amountSats} exceeds max ${env.MAX_PAYOUT_SATS} sats`);
+    }
 
     // ----- Amount validation (critical) -----
     let invoiceSats: bigint | null = null;

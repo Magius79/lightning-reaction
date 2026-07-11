@@ -12,6 +12,7 @@ import {
   upsertRoomPlayer
 } from '../services/rooms';
 import { confirmByHash, createPendingEntry } from '../services/transactions';
+import { internalAuth } from '../utils/internalAuth';
 
 export const roomsRouter = Router();
 
@@ -86,7 +87,7 @@ roomsRouter.post('/confirm', async (req, res, next) => {
 });
 
 // Update player stats after a game (called by WebSocket server)
-roomsRouter.post('/update-stats', async (req, res, next) => {
+roomsRouter.post('/update-stats', internalAuth, async (req, res, next) => {
   try {
     const body = parseBody(
       z.object({
@@ -112,7 +113,7 @@ roomsRouter.post('/update-stats', async (req, res, next) => {
 });
 
 // Credit a player (called by WebSocket server when room times out)
-roomsRouter.post('/credit', async (req, res, next) => {
+roomsRouter.post('/credit', internalAuth, async (req, res, next) => {
   try {
     const body = parseBody(z.object({ pubkey: z.string().min(16) }), req.body);
     addPlayerCredit(body.pubkey);

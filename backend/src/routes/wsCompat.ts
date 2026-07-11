@@ -5,10 +5,16 @@ import { checkInvoice, payInvoice } from '../services/lightning';
 import { getByHash, confirmByHash, isPaymentHashUsed, markPaymentHashUsed } from '../services/transactions';
 import { markRoomPlayerPaidByHash } from '../services/rooms';
 import { logger } from '../config/logger';
+import { internalAuth } from '../utils/internalAuth';
+import { env } from '../config/env';
+import { HttpError } from '../utils/httpError';
 
 // Compatibility routes for the current websocket server implementation.
 // TODO: replace websocket server to call the canonical /api/* routes.
+// All routes here are server-to-server only — guard with the internal key.
 export const wsCompatRouter = Router();
+
+wsCompatRouter.use(internalAuth);
 
 wsCompatRouter.post('/verify-payment', async (req, res, next) => {
   try {
@@ -52,6 +58,10 @@ wsCompatRouter.post('/payout', async (req, res, next) => {
       }),
       req.body
     );
+
+    if (body.amountSats > env.MAX_PAYOUT_SATS) {
+      throw new HttpError(400, `Payout amount ${body.amountSats} exceeds max ${env.MAX_PAYOUT_SATS} sats`);
+    }
 
     logger.info({ amountSats: body.amountSats }, 'wsCompat /payout: initiating Lightning payout');
 
