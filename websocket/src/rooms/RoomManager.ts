@@ -662,11 +662,33 @@ export class RoomManager {
       return;
     }
 
-    // Non-explicit disconnect on finished game with pending payout: keep room alive.
-    // IMPORTANT: do NOT delete socketRooms here so payout can be retried on the same socket.
-    if (!explicit && room.status === 'finished' && room.payoutStatus !== 'paid') {
-      console.log(`[RoomManager] Socket ${socket.id} disconnected (reconnect?) — keeping finished room ${roomId} alive for payout`);
-      this.startPayoutTimeout(roomId);
+    // Non-explicit disconnect on a finished game.
+    if (!explicit && room.status === 'finished') {
+      // Only a real, unpaid win needs the room kept alive: the winner may be
+      // reconnecting to submit their payout invoice. Do NOT delete socketRooms
+      // here so the payout can be retried on the reconnected socket.
+      if (room.payoutStatus === 'requested') {
+        console.log(`[RoomManager] Socket ${socket.id} disconnected (reconnect?) — keeping finished room ${roomId} alive for payout`);
+        this.startPayoutTimeout(roomId);
+        return;
+      }
+
+      // Nothing to pay out (freeplay, bot won, no winner, or already paid) —
+      // tear the room down instead of leaking it until a timer fires. A bot has
+      // no socket and never disconnects, so a bot-only room would otherwise sit
+      // in memory until the 15-min safety cleanup.
+      this.socketRooms.delete(socket.id);
+      room.removePlayer(socket.id);
+      socket.leave(roomId);
+
+      const humansLeft = Array.from(room.players.keys()).some((sid) => !isBot(sid));
+      if (!humansLeft) {
+        this.clearRoomTimeout(roomId);
+        this.clearBotTimeout(roomId);
+        this.clearPayoutTimeout(roomId);
+        this.rooms.delete(roomId);
+        console.log(`[RoomManager] Finished room ${roomId} torn down on disconnect (no payout pending)`);
+      }
       return;
     }
 
