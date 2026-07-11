@@ -7,6 +7,9 @@
 **/*.log
 .DS_Store
 
+# build archives (regenerable — don't commit)
+*.tgz
+
 # sqlite artifacts (do not commit)
 backend/data/*.sqlite-wal
 backend/data/*.sqlite-shm
