@@ -212,6 +212,30 @@ CREATE TABLE IF NOT EXISTS used_payment_hashes (
   used_at INTEGER NOT NULL
 );
 `
+  },
+  {
+    // Per-game reaction samples for anti-cheat auditing. One row per human
+    // player per finished game (bot excluded). Enables win-rate, reaction
+    // variance, DQ-rate and multi-account (by IP) analysis.
+    id: '004_game_results',
+    sql: `
+CREATE TABLE IF NOT EXISTS game_results (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  room_id TEXT,
+  pubkey TEXT NOT NULL,
+  reaction_time INTEGER,
+  won INTEGER NOT NULL DEFAULT 0,
+  disqualified INTEGER NOT NULL DEFAULT 0,
+  had_bot INTEGER NOT NULL DEFAULT 0,
+  num_players INTEGER,
+  is_freeplay INTEGER NOT NULL DEFAULT 0,
+  ip TEXT,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_results_pubkey ON game_results(pubkey);
+CREATE INDEX IF NOT EXISTS idx_game_results_created ON game_results(created_at);
+`
   }
 ];
 

@@ -124,9 +124,14 @@ export class GameEngine {
    * Calculate adaptive bot delay for paid games based on the human opponent's
    * rolling average reaction time.
    *
-   * Formula: floor = max(playerAvg - 40, 180), range = 150ms
-   * Bot reacts in [floor, floor + 150] ms.
-   * Falls back to 300-450ms if no player history available.
+   * The bot's reaction is centered ON the player's average — range
+   * [playerAvg - 75, playerAvg + 75] — so a consistent player wins ~50%.
+   * (The old floor of playerAvg - 40 with a +150 range put the bot's mean at
+   * playerAvg + 35, which let steady players beat this house-funded bot ~73%
+   * of the time — farmable. Centering it makes the match fair and not farmable.)
+   * Clamped so the bot never reacts faster than HARD_MIN (180ms); genuinely
+   * fast players legitimately win more against that floor.
+   * Falls back to 400-550ms when there's no player history yet.
    */
   private calcAdaptiveBotDelay(room: Room): number {
     // Find the human opponent's pubkey
@@ -144,7 +149,8 @@ export class GameEngine {
     if (humanPubkey) {
       const playerAvg = this.antiCheat.getPlayerAvgReaction(humanPubkey);
       if (playerAvg !== null) {
-        const floor = Math.max(Math.round(playerAvg - 40), HARD_MIN);
+        // Center the range on playerAvg → symmetric [avg - 75, avg + 75].
+        const floor = Math.max(Math.round(playerAvg - BOT_RANGE / 2), HARD_MIN);
         const delay = floor + Math.floor(Math.random() * BOT_RANGE);
         console.log(`[GameEngine] Adaptive bot: playerAvg=${Math.round(playerAvg)}ms → bot range [${floor}, ${floor + BOT_RANGE}]ms → delay=${delay}ms`);
         return delay;
@@ -236,6 +242,28 @@ export class GameEngine {
       freeplay: room.isFreeplay,
       results,
     });
+
+    // Record per-game reaction samples for anti-cheat auditing (all games,
+    // paid and freeplay; bot excluded). Best-effort — never blocks play.
+    const humanPlayers = Array.from(room.players.values()).filter((p) => p.pubkey !== BOT_PUBKEY);
+    if (humanPlayers.length > 0) {
+      const hadBot = Array.from(room.players.keys()).some((sid) => isBot(sid));
+      backendApi
+        .post(`${this.BACKEND_API}/api/rooms/record-game`, {
+          roomId,
+          isFreeplay: room.isFreeplay,
+          hadBot,
+          numPlayers: room.players.size,
+          players: humanPlayers.map((p) => ({
+            pubkey: p.pubkey,
+            reactionTime: p.reactionTime ?? null,
+            won: p.pubkey === winner?.pubkey,
+            disqualified: p.disqualified,
+            ip: p.ip,
+          })),
+        })
+        .catch((e: any) => console.error(`[GameEngine] record-game failed for room ${roomId}:`, e?.message));
+    }
 
     // Update player stats in the backend (skip bot and freeplay)
     if (!room.isFreeplay) {

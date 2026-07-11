@@ -34,6 +34,8 @@ io.use(authMiddleware);
 io.on('connection', (socket) => {
   const ip = socket.handshake.headers['x-forwarded-for']?.toString().split(',')[0].trim()
     || socket.handshake.address;
+  // Stash for per-game audit logging (used when the player joins a room).
+  socket.data.ip = ip;
 
   if (roomManager.checkConnection(ip)) {
     console.log(`[AntiCheat] Blocked connection from ${ip} — too many concurrent connections`);

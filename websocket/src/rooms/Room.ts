@@ -14,6 +14,7 @@ interface PlayerState {
   tapTime: number | null;
   reactionTime: number | null;
   disqualified: boolean;
+  ip: string | null;
 }
 
 export class Room {
@@ -69,6 +70,7 @@ export class Room {
       tapTime: null,
       reactionTime: null,
       disqualified: false,
+      ip: ((socket.data as any)?.ip as string) ?? null,
     });
   }
 
@@ -83,6 +85,7 @@ export class Room {
       tapTime: null,
       reactionTime: null,
       disqualified: false,
+      ip: null,
     });
     // House stakes the bot's entry
     this.prizePool += Math.floor(this.entryFee * (1 - this.houseEdge));

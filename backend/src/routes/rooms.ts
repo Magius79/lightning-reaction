@@ -12,6 +12,7 @@ import {
   upsertRoomPlayer
 } from '../services/rooms';
 import { confirmByHash, createPendingEntry } from '../services/transactions';
+import { recordGameResults } from '../services/gameResults';
 import { internalAuth } from '../utils/internalAuth';
 
 export const roomsRouter = Router();
@@ -106,6 +107,42 @@ roomsRouter.post('/update-stats', internalAuth, async (req, res, next) => {
     }
 
     console.log('[rooms/update-stats] updated stats for', body.players.length, 'players');
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
+// Record per-game reaction samples for anti-cheat auditing (called by WebSocket
+// server after every finished game). Best-effort; failures don't affect play.
+roomsRouter.post('/record-game', internalAuth, (req, res, next) => {
+  try {
+    const body = parseBody(
+      z.object({
+        roomId: z.string().nullable().optional(),
+        isFreeplay: z.boolean(),
+        hadBot: z.boolean(),
+        numPlayers: z.number().int().nonnegative(),
+        players: z.array(z.object({
+          pubkey: z.string().min(16),
+          reactionTime: z.number().nullable(),
+          won: z.boolean(),
+          disqualified: z.boolean(),
+          ip: z.string().nullable().optional(),
+        })),
+      }),
+      req.body
+    );
+
+    if (body.players.length > 0) {
+      recordGameResults({
+        roomId: body.roomId ?? null,
+        isFreeplay: body.isFreeplay,
+        hadBot: body.hadBot,
+        numPlayers: body.numPlayers,
+        players: body.players,
+      });
+    }
     res.json({ ok: true });
   } catch (e) {
     next(e);
